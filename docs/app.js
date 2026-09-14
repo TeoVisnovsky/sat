@@ -5,6 +5,7 @@ let selectedAnswer=null;
 let meta,questions=[],current=null,answered=false,busy=false,loadVersion=0,listVersion=0;
 let noteTimer,searchTimer,toastTimer,noteQueue=Promise.resolve();
 const pendingNotes=new Map();
+const noteParents=new Map();
 async function api(path,data){
  if(window.SATOffline)return SATOffline.request(bank,path,data);
  const r=await fetch('/api/'+path+(data===undefined?(path.includes('?')?'&':'?')+'bank='+encodeURIComponent(bank):''),data===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-SAT-Bank':bank},body:JSON.stringify(data)});
@@ -33,10 +34,10 @@ async function stats(){
  $('skillStats').innerHTML=s.skills.map(k=>`<div class="skill-stat"><button data-skill="${k.id}">${esc(k.name)}</button><div><small>${k.done} / ${k.total} completed</small><progress value="${k.done}" max="${k.total}"></progress></div><div class="accuracy">${k.done?Math.round(100*k.correct/k.done)+'%':'—'}<br><small>accuracy</small></div></div>`).join('');
  $('skillStats').querySelectorAll('button').forEach(b=>b.onclick=safe(async()=>{showView(false);$('domain').value='';fillSkills();$('skill').value=b.dataset.skill;for(const k of ['difficulty','status','my_difficulty','tag','search'])$(k).value='';await loadList();}));
 }
-async function flushNotes(){clearTimeout(noteTimer);await noteQueue;if(pendingNotes.size){const batch=[...pendingNotes];noteQueue=(async()=>{for(const [question_id,content] of batch){await api('note',{question_id,content});if(pendingNotes.get(question_id)===content)pendingNotes.delete(question_id);if(current?.id===question_id&&$('saveStatus'))$('saveStatus').textContent=pendingNotes.has(question_id)?'Saving…':'Saved';}})();try{await noteQueue;}catch(e){noteQueue=Promise.resolve();if($('saveStatus'))$('saveStatus').textContent='Not saved — retry below';throw e;}}}
+async function flushNotes(){clearTimeout(noteTimer);await noteQueue;if(pendingNotes.size){const batch=[...pendingNotes];noteQueue=(async()=>{for(const [question_id,content] of batch){const result=await api('note',{question_id,content,parents:noteParents.get(question_id)});if(result.note_parents)noteParents.set(question_id,result.note_parents);if(pendingNotes.get(question_id)===content)pendingNotes.delete(question_id);if(current?.id===question_id&&$('saveStatus'))$('saveStatus').textContent=pendingNotes.has(question_id)?'Saving…':'Saved';}})();try{await noteQueue;}catch(e){noteQueue=Promise.resolve();if($('saveStatus'))$('saveStatus').textContent='Not saved — retry below';throw e;}}}
 async function openQuestion(id){
  await flushNotes();const version=++loadVersion;busy=false;answered=false;selectedAnswer=null;$('workspace').setAttribute('aria-busy','true');
- const q=await api('question/'+id);if(version!==loadVersion)return;current=q;history.replaceState(null,'','#q='+id);renderList();renderQuestion();$('workspace').removeAttribute('aria-busy');
+ const q=await api('question/'+id);if(version!==loadVersion)return;current=q;noteParents.set(id,q.note_parents);history.replaceState(null,'','#q='+id);renderList();renderQuestion();$('workspace').removeAttribute('aria-busy');
 }
 function renderQuestion(){
  const q=current;const pos=questions.findIndex(x=>x.id===q.id);
@@ -96,10 +97,12 @@ async function nextQuestion(){
 function showView(progress){$('practiceView').hidden=progress;$('progressView').hidden=!progress;$('practiceTab').classList.toggle('active',!progress);$('progressTab').classList.toggle('active',progress);}
 async function init(){
  document.addEventListener('click',e=>{if(!$('bankMenu').contains(e.target))$('bankMenu').open=false;});
+ document.addEventListener('click',e=>{if(!$('accountMenu').contains(e.target))$('accountMenu').open=false;});
  document.addEventListener('keydown',e=>{if(e.key==='Escape'){$('bankMenu').open=false;}});
  const banks=await api('banks');
  $('bankSelect').innerHTML=banks.map(b=>`<option value="${esc(b.id)}">${esc(b.name)}</option>`).join('');$('bankSelect').value=bank;
  $('sqliteBackup').href='/api/backup?bank='+encodeURIComponent(bank);$('sqliteBackup').hidden=!!window.SATOffline;
+ $('openWebApp').hidden=!!window.SATOffline;
  $('sqliteBackup').onclick=safe(async e=>{e.preventDefault();if(busy){toast('Wait for your answer to finish saving.');return;}await flushNotes();location.href=$('sqliteBackup').href;});
  $('exportBank').onclick=safe(async()=>{if(busy){toast('Wait for your answer to finish saving.');return;}await flushNotes();const data=await api('export');data.bank.name=$('bankSelect').selectedOptions[0].textContent;const blob=new Blob([JSON.stringify(data)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='sat-'+new Date().toISOString().slice(0,10)+'.satbank.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),60000);toast('Export ready. Keep the file for transfer or backup.');});
  $('bankSelect').onchange=safe(async()=>{if(busy){$('bankSelect').value=bank;toast('Wait for your answer to finish saving.');return;}const next=$('bankSelect').value;try{await flushNotes();location.href=location.pathname+'?bank='+encodeURIComponent(next);}catch(e){$('bankSelect').value=bank;throw e;}});
@@ -130,5 +133,16 @@ async function init(){
  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'&&pendingNotes.size)flushNotes().catch(fail);});
  document.addEventListener('keydown',e=>{if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)||e.ctrlKey||e.metaKey||e.altKey||$('practiceView').hidden)return;if(/^[a-d]$/i.test(e.key)&&current&&!answered)selectAnswer(e.key.toUpperCase());});
  const imported=sessionStorage.getItem('sat-import-result');if(imported){sessionStorage.removeItem('sat-import-result');$('error').textContent=imported;$('error').classList.add('success');$('error').hidden=false;}
+ if(window.SATCloud&&window.SATOffline){
+  window.addEventListener('sat-cloud-updated',safe(async()=>{
+   const banks=await api('banks');$('bankSelect').innerHTML=banks.map(b=>`<option value="${esc(b.id)}">${esc(b.name)}</option>`).join('');$('bankSelect').value=bank;
+   meta=await api('meta');fillSkills();fillTags();await refreshProgress();
+   if(current){const id=current.id,version=loadVersion,q=await api('question/'+id);if(version!==loadVersion)return;
+    if(!pendingNotes.has(id)&&document.activeElement!==$('note')){$('note').value=q.note;noteParents.set(id,q.note_parents);}
+    current.my_difficulty=q.my_difficulty;current.needs_review=q.needs_review;
+   }
+  }));
+  await SATCloud.setup();
+ }
 }
 safe(init)();

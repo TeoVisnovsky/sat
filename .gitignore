@@ -12,3 +12,5 @@ __pycache__/
 databases/
 *.satbank.json
 verification-report.json
+node_modules/
+backups/

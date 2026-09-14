@@ -1,0 +1,13 @@
+{
+  "name": "sat-english-offline",
+  "private": true,
+  "scripts": {
+    "vendor": "node scripts/vendor-supabase.cjs",
+    "test": "node test_bank_core.js && node test_sync.cjs && node test_cloud_sql.cjs && node test_offline.cjs"
+  },
+  "devDependencies": {
+    "@supabase/supabase-js": "2.116.0",
+    "@electric-sql/pglite": "0.5.8",
+    "fake-indexeddb": "6.2.5"
+  }
+}

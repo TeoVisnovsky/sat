@@ -1,19 +1,29 @@
 # SAT English Trainer
 
-A minimal SAT Reading & Writing practice app with **753 questions**, answers and explanations, charts, and saved progress. Use the local Python service on your PC or install the offline web app on your phone. No account, Codex installation, API key, or paid service is needed.
+A minimal SAT Reading & Writing practice app with **753 questions**, answers and explanations, charts, and saved progress. Use the same offline web app on your PC and phone. Sign in with Google to sync your own progress automatically, or practice without an account on one device. Friends can use their own Google accounts and get independent progress. No Python or Codex installation is needed for the website.
 
-## Practice on your phone
+## Start on PC or phone
+
+Open **[SAT English](https://teovisnovsky.github.io/sat/)** and choose **Account → Sign in with Google** on each device. Use the same Google account for your own devices. Answers, notes, difficulty ratings and question banks save locally first and sync when the app is open and connected. The header shows **Synced**, **Changes waiting**, or an offline/retry status; click it to retry and open **Account** for details.
+
+On PC, bookmark the site, use the browser's install option, or double-click **Start SAT Web.url** from the download. You no longer need to keep a local server running. The original Python service remains available below as a separate offline option.
+
+**Moving existing progress:** in the old PC service, click **Export**. Sign in on the website, then use **Databases → Import / merge → Merge into this database**. For progress already saved in the website without an account, sign in and use **Account → Copy device-only progress**. Guest history is never silently assigned to another person's account.
+
+Sync does not need both devices online at once. Open the first device online until it says **Synced**, then open the second device online. Offline edits upload next time that device connects with the app open. Keep occasional Export backups. The merge rules below also apply to cloud sync.
+
+## Install for offline practice
 
 1. Open **[SAT English](https://teovisnovsky.github.io/sat/)** on your phone while connected to the internet.
 2. **iPhone:** use Safari → Share → **Add to Home Screen**. **Android:** use Chrome → menu → **Install app / Add to Home screen**. There is also an install/help button inside **Databases**.
 3. Open the app from its home-screen icon while still connected. In **Databases**, wait for **Ready offline · saved on this device**.
 4. You can now turn on airplane mode, close and reopen the app, and practice. Your PC can be switched off.
 
-The phone downloads all question text, answers, explanations and inline charts. It saves your banks, attempts, notes, tags and ratings on the phone. The website supplies installation files and updates; your study data is never uploaded to it. There is no running Python service or account on the phone.
+The phone downloads all question text, answers, explanations and inline charts. It saves your banks, attempts, notes, tags and ratings on the phone. When signed in, your study data also syncs to your private account in Supabase. Without sign-in it stays on that device. There is no running Python service on the phone.
 
 Use the same installed app each time. A different browser, website address or home-screen installation can have separate storage. Keep **Export** backups in Files/Downloads: clearing browser data, removing the app, or the phone reclaiming storage can remove local data. Opening **Install / offline help** requests persistent storage where supported, but exports remain the reliable backup.
 
-## Transfer between phone and PC
+## Optional manual transfer between devices
 
 1. On the device you studied on, choose the database and click **Export**.
 2. Move the downloaded `sat-YYYY-MM-DD.satbank.json` file to the other device using a cable, AirDrop, Quick Share, or your usual file-transfer method. On a phone, save it to Files/Downloads first if necessary.
@@ -34,7 +44,7 @@ Merge behavior:
 
 Use **Merge** for your own devices. Use **Add as separate database** when you want a separate practice history, such as a friend's bank. Transfers include notes and their previous revisions as well as all attempts.
 
-## Download and start
+## Optional local Python service
 
 ### Windows
 
@@ -75,7 +85,7 @@ Keep the terminal open while practicing. Press **Ctrl+C** to stop the server. No
 - Wrong and guessed answers enter review. A confident correct retry removes a question from review; you can also mark questions manually.
 - **Progress** shows unique questions completed and first-attempt accuracy. Retrying never inflates completion or erases earlier attempts.
 
-Everything saves to your computer. Each friend has independent progress. Local question links work on the computer running the app; they do not share your server over the internet.
+The web app saves on each device and syncs to the signed-in account. Each friend has independent progress. The optional Python service saves only to its local SQLite database; it does not participate in cloud sync.
 
 ## Databases and starting fresh
 
@@ -120,17 +130,18 @@ Question content belongs to College Board. This is an unofficial practice tool, 
 
 ## Development
 
-Python 3.10+ standard library, SQLite, and plain HTML/CSS/JavaScript. The phone uses IndexedDB and a service worker. `schema.sql` documents the PC database; [TRANSFER_FORMAT.md](TRANSFER_FORMAT.md) documents the portable format and future sync boundary.
+Python 3.10+ standard library, SQLite, and plain HTML/CSS/JavaScript. The web app uses IndexedDB, a service worker, and a locally bundled Supabase JavaScript SDK. See [Supabase setup](supabase/README.md) for Google login, redirect URLs, access rules and verification. `schema.sql` documents the PC database; [TRANSFER_FORMAT.md](TRANSFER_FORMAT.md) documents the portable format and future sync boundary.
 
 ```sh
 python server.py --open
 python test_service.py
 python test_transfer.py
-node test_bank_core.js
+npm ci --ignore-scripts
+npm test
 python build_phone.py
 ```
 
-Tests use disposable copies and leave your study history untouched. Node 20+ is needed only for JavaScript and cross-runtime tests, not to use or build the app.
+Tests use disposable copies and leave your study history untouched. Node 22+ is needed for development tests and refreshing the vendored SDK (`npm run vendor`), not to use the app. The SDK is included in the repository so Python alone can rebuild the website.
 
 `build_phone.py` generates `docs/` from `web/` and **sat-clean.db only**, and refuses to build if that template contains personal progress. Commit the generated files after changing the shared UI. GitHub Pages serves **main → /docs**. You can also serve that directory from another HTTPS static host. Preview it locally at `http://127.0.0.1:8765/phone/`; this preview has separate browser storage from the PC database and the public phone URL.
 
@@ -146,4 +157,4 @@ python recover_prompts.py
 
 Run both steps. Recovery needs internet unless official responses are cached in `source-cache/`. Source PDFs and that cache are not required for practice and are not distributed in this repository. Reimporting preserves attempts, notes, tags, and ratings. Import reports contain the validation results.
 
-The Python service binds only to `127.0.0.1`. Manual file transfer is implemented; online sync is deferred. Stable record IDs, UTC timestamps and note revision ancestry allow a future backend to merge snapshots while each device syncs independently.
+The Python service binds only to `127.0.0.1`. The website syncs each device independently through Supabase using stable record IDs, note revision ancestry and version-checked writes. Keep the Supabase SQL and authentication configuration in place when hosting your own copy.
