@@ -1,0 +1,12 @@
+*.db
+!sat-clean.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.pdf
+source-cache/
+tmp/
+__pycache__/
+*.log
+
+databases/

@@ -1,0 +1,93 @@
+{
+  "files": [
+    {
+      "filename": "sat-rw-answers-emh-part-01-of-08.pdf",
+      "questions": 100
+    },
+    {
+      "filename": "sat-rw-answers-emh-part-02-of-08.pdf",
+      "questions": 100
+    },
+    {
+      "filename": "sat-rw-answers-emh-part-03-of-08.pdf",
+      "questions": 100
+    },
+    {
+      "filename": "sat-rw-answers-emh-part-04-of-08.pdf",
+      "questions": 100
+    },
+    {
+      "filename": "sat-rw-answers-emh-part-05-of-08.pdf",
+      "questions": 100
+    },
+    {
+      "filename": "sat-rw-answers-emh-part-06-of-08.pdf",
+      "questions": 100
+    },
+    {
+      "filename": "sat-rw-answers-emh-part-07-of-08.pdf",
+      "questions": 100
+    },
+    {
+      "filename": "sat-rw-answers-emh-part-08-of-08.pdf",
+      "questions": 53
+    }
+  ],
+  "questions": 753,
+  "duplicates": 0,
+  "errors": [],
+  "integrity_check": "ok",
+  "foreign_key_errors": [],
+  "skills": [
+    {
+      "domain": "Information and Ideas",
+      "skill": "Central Ideas and Details",
+      "count": 61
+    },
+    {
+      "domain": "Information and Ideas",
+      "skill": "Inferences",
+      "count": 68
+    },
+    {
+      "domain": "Information and Ideas",
+      "skill": "Command of Evidence",
+      "count": 123
+    },
+    {
+      "domain": "Craft and Structure",
+      "skill": "Words in Context",
+      "count": 88
+    },
+    {
+      "domain": "Craft and Structure",
+      "skill": "Text Structure and Purpose",
+      "count": 59
+    },
+    {
+      "domain": "Craft and Structure",
+      "skill": "Cross-Text Connections",
+      "count": 40
+    },
+    {
+      "domain": "Expression of Ideas",
+      "skill": "Transitions",
+      "count": 70
+    },
+    {
+      "domain": "Expression of Ideas",
+      "skill": "Rhetorical Synthesis",
+      "count": 82
+    },
+    {
+      "domain": "Standard English Conventions",
+      "skill": "Boundaries",
+      "count": 84
+    },
+    {
+      "domain": "Standard English Conventions",
+      "skill": "Form, Structure, and Sense",
+      "count": 78
+    }
+  ]
+}
