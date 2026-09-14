@@ -3,6 +3,7 @@ from pathlib import Path
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlsplit, parse_qs, unquote
 import argparse, json, mimetypes, sqlite3, tempfile, os, traceback, uuid, shutil, threading, webbrowser
+import transfer
 from contextlib import contextmanager
 
 ROOT=Path(__file__).resolve().parent
@@ -36,7 +37,7 @@ def import_bank(raw,name):
             expected=sqlite3.connect(':memory:')
             try:
                 expected.executescript((ROOT/'schema.sql').read_text())
-                for table, in expected.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('official_references','personal_difficulty')"):
+                for table, in expected.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('official_references','personal_difficulty','transfer_meta','attempt_ids','note_versions','state_versions')"):
                     required={r[1] for r in expected.execute('PRAGMA table_info('+table+')')}
                     entry=db.execute('SELECT type FROM sqlite_master WHERE name=?',(table,)).fetchone()
                     actual={r[1] for r in db.execute('PRAGMA table_info('+table+')')}
@@ -47,9 +48,11 @@ def import_bank(raw,name):
             if db.execute("SELECT COUNT(*) FROM questions q WHERE (SELECT COUNT(*) FROM choices c WHERE c.question_id=q.id)!=4 OR NOT EXISTS(SELECT 1 FROM choices c WHERE c.question_id=q.id AND c.letter=q.correct_answer) OR prompt_html='' ").fetchone()[0]:raise ValueError('Questions must have a prompt, four choices, and a valid answer')
             from recover_prompts import clean
             for qid,passage,prompt,explanation in db.execute('SELECT id,passage_html,prompt_html,explanation_html FROM questions').fetchall():
-                if not isinstance(qid,str) or len(qid)!=8 or any(c not in '0123456789abcdef' for c in qid):raise ValueError('Question IDs must be eight hexadecimal characters')
+                if not isinstance(qid,str) or not 1<=len(qid)<=80 or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-' for c in qid):raise ValueError('Invalid question ID')
                 db.execute('UPDATE questions SET passage_html=?,prompt_html=?,explanation_html=? WHERE id=?',(clean(passage),clean(prompt),clean(explanation),qid))
             for qid,letter,content in db.execute('SELECT question_id,letter,content_html FROM choices').fetchall():db.execute('UPDATE choices SET content_html=? WHERE question_id=? AND letter=?',(clean(content),qid,letter))
+            transfer.migrate(db)
+            db.execute("UPDATE transfer_meta SET value=? WHERE key='bank_id'",(transfer.uid(),))
             db.commit()
         finally:db.close()
         (BANKS/(key+'.json')).write_text(json.dumps({'name':Path(name).stem[:80] or 'Imported bank'}),encoding='utf-8')
@@ -62,6 +65,7 @@ def connect(path=None):
     db=sqlite3.connect(path or DB,timeout=15);db.row_factory=sqlite3.Row
     db.execute('PRAGMA foreign_keys=ON')
     db.execute("CREATE TABLE IF NOT EXISTS personal_difficulty(question_id TEXT PRIMARY KEY REFERENCES questions(id),rating TEXT NOT NULL CHECK(rating IN ('easy','medium','hard')),updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+    transfer.migrate(db);db.commit()
     try:
         with db:yield db
     finally:db.close()
@@ -72,7 +76,7 @@ BASE='''SELECT q.id,q.skill_id,q.difficulty,q.passage_html,q.prompt_html,s.name 
  COALESCE(r.needs_review,0) needs_review,
  (SELECT COUNT(*) FROM attempts WHERE question_id=q.id) attempt_count
  FROM questions q JOIN skills s ON s.id=q.skill_id JOIN domains d ON d.id=s.domain_id
- LEFT JOIN attempts a ON a.id=(SELECT MAX(id) FROM attempts WHERE question_id=q.id)
+ LEFT JOIN attempts a ON a.id=(SELECT id FROM attempts WHERE question_id=q.id ORDER BY julianday(answered_at) DESC,COALESCE((SELECT sync_id FROM attempt_ids WHERE attempt_id=attempts.id),printf('%020d',id)) DESC LIMIT 1)
  LEFT JOIN review_state r ON r.question_id=q.id'''
 
 class Handler(BaseHTTPRequestHandler):
@@ -89,6 +93,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def get(self):
         parsed=urlsplit(self.path);path=unquote(parsed.path);params=parse_qs(parsed.query)
+        if path=='/phone':self.send_response(302);self.send_header('Location','/phone/');self.end_headers();return
         if path=='/api/banks':
             banks=[{'id':'main','name':'SAT English · original bank'}]
             for file in sorted(BANKS.glob('*.db')):
@@ -122,12 +127,12 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/stats':
                 total=db.execute('SELECT COUNT(*) FROM questions').fetchone()[0]
                 done=db.execute('SELECT COUNT(DISTINCT question_id) FROM attempts').fetchone()[0]
-                first=db.execute('SELECT COUNT(*),COALESCE(SUM(is_correct),0) FROM attempts WHERE id IN (SELECT MIN(id) FROM attempts GROUP BY question_id)').fetchone()
+                first=db.execute("SELECT COUNT(*),COALESCE(SUM(is_correct),0) FROM attempts a WHERE id=(SELECT id FROM attempts WHERE question_id=a.question_id ORDER BY julianday(answered_at),COALESCE((SELECT sync_id FROM attempt_ids WHERE attempt_id=attempts.id),printf('%020d',id)) LIMIT 1)").fetchone()
                 review=db.execute('SELECT COUNT(*) FROM review_state WHERE needs_review=1').fetchone()[0]
                 skills=[dict(r) for r in db.execute('''SELECT s.name,s.id,COUNT(q.id) total,
                 SUM(CASE WHEN a.id IS NOT NULL THEN 1 ELSE 0 END) done,COALESCE(SUM(a.is_correct),0) correct
                 FROM skills s JOIN questions q ON q.skill_id=s.id LEFT JOIN attempts a
-                ON a.id=(SELECT MIN(id) FROM attempts WHERE question_id=q.id) GROUP BY s.id''')]
+                ON a.id=(SELECT id FROM attempts WHERE question_id=q.id ORDER BY julianday(answered_at),COALESCE((SELECT sync_id FROM attempt_ids WHERE attempt_id=attempts.id),printf('%020d',id)) LIMIT 1) GROUP BY s.id''')]
                 self.respond(dict(total=total,done=done,first_correct=first[1],review=review,skills=skills));return
             if path.startswith('/api/question/'):
                 qid=path.rsplit('/',1)[-1];row=db.execute(BASE+' WHERE q.id=?',(qid,)).fetchone()
@@ -137,10 +142,13 @@ class Handler(BaseHTTPRequestHandler):
                 data['assets']=[dict(r) for r in db.execute('SELECT file_path,alt_text FROM assets WHERE question_id=?',(qid,)) if (ROOT/r['file_path']).is_file()] if bank=='main' else []
                 note=db.execute('SELECT content FROM notes WHERE question_id=?',(qid,)).fetchone();data['note']=note[0] if note else ''
                 data['tags']=[r[0] for r in db.execute('SELECT name FROM tags JOIN question_tags ON tag_id=tags.id WHERE question_id=? ORDER BY name',(qid,))]
-                data['history']=[dict(r) for r in db.execute('SELECT * FROM attempts WHERE question_id=? ORDER BY id DESC',(qid,))]
+                data['history']=[dict(r) for r in db.execute("SELECT * FROM attempts WHERE question_id=? ORDER BY julianday(answered_at) DESC,COALESCE((SELECT sync_id FROM attempt_ids WHERE attempt_id=attempts.id),printf('%020d',id)) DESC",(qid,))]
                 data['sources']=[dict(r) for r in db.execute('SELECT filename,page_start,page_end FROM sources JOIN question_sources ON source_id=sources.id WHERE question_id=?',(qid,))]
                 self.respond(data);return
+            if path=='/api/export':
+                data=transfer.export_bank(db);self.respond(data);return
             if path=='/api/backup':
+                transfer.capture(db);db.commit()
                 fd,name=tempfile.mkstemp(suffix='.db');os.close(fd)
                 try:
                     target=sqlite3.connect(name);db.backup(target);target.close();raw=Path(name).read_bytes()
@@ -148,11 +156,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(200);self.send_header('Content-Type','application/vnd.sqlite3');self.send_header('Content-Disposition','attachment; filename="sat-backup.db"');self.send_header('Content-Length',str(len(raw)));self.end_headers();self.wfile.write(raw);return
         # Explicit public directories only: never expose the database or server source.
         if path in ('/','/index.html'):file=ROOT/'web'/'index.html'
+        elif path in ('/phone','/phone/'):file=ROOT/'docs'/'index.html'
+        elif path.startswith('/phone/'):file=ROOT/'docs'/path[len('/phone/'):]
         elif path.startswith('/assets/'):file=ROOT/path.lstrip('/')
         elif path.startswith('/web/'):file=ROOT/path.lstrip('/')
         else:self.respond({'error':'Not found'},404);return
         file=file.resolve()
-        if not any(file.is_relative_to(ROOT/d) for d in ('web','assets')) or not file.is_file():self.respond({'error':'Not found'},404);return
+        if not any(file.is_relative_to(ROOT/d) for d in ('web','assets','docs')) or not file.is_file():self.respond({'error':'Not found'},404);return
         raw=file.read_bytes();self.send_response(200);self.send_header('Content-Type',mimetypes.guess_type(file.name)[0] or 'application/octet-stream');self.send_header('Content-Length',str(len(raw)));self.send_header('X-Content-Type-Options','nosniff');self.end_headers();self.wfile.write(raw)
 
     def do_POST(self):
@@ -167,9 +177,31 @@ class Handler(BaseHTTPRequestHandler):
                 if not 0<length<=50*1024*1024:raise ValueError('Choose a database under 50 MB')
                 raw=self.rfile.read(length)
                 if len(raw)!=length:raise ValueError('Upload was incomplete')
-                key=import_bank(raw,unquote(self.headers.get('X-Filename','Imported bank.db')))
-                self.respond({'id':key});return
-            except (ValueError,sqlite3.Error) as exc:self.respond({'error':str(exc)},400);return
+                filename=unquote(self.headers.get('X-Filename','Imported bank.db'))
+                mode=self.headers.get('X-Import-Mode','add')
+                if mode not in ('add','merge'):raise ValueError('Choose add or merge')
+                if raw.startswith(b'SQLite format 3\x00'):
+                    key=import_bank(raw,filename)
+                    if mode=='add':self.respond({'id':key});return
+                    try:
+                        with connect(bank_path(key)) as source:incoming=transfer.export_bank(source)
+                    finally:
+                        (BANKS/(key+'.db')).unlink(missing_ok=True);(BANKS/(key+'.json')).unlink(missing_ok=True)
+                else:incoming=transfer.validate(json.loads(raw))
+                report={}
+                if mode=='merge':
+                    key=self.headers.get('X-SAT-Bank','main')
+                    with connect(bank_path(key)) as target:
+                        merged,report=transfer.merge(transfer.export_bank(target),incoming);transfer.store(target,merged)
+                else:
+                    BANKS.mkdir(exist_ok=True);key=uuid.uuid4().hex;path=BANKS/(key+'.db')
+                    try:
+                        with sqlite3.connect(path) as target:
+                            target.row_factory=sqlite3.Row;target.executescript((ROOT/'schema.sql').read_text());transfer.store(target,incoming)
+                        (BANKS/(key+'.json')).write_text(json.dumps({'name':incoming['bank']['name'][:80]}),encoding='utf-8')
+                    except Exception:path.unlink(missing_ok=True);raise
+                self.respond({'id':key,**report});return
+            except (ValueError,sqlite3.Error,KeyError,TypeError,RecursionError) as exc:self.respond({'error':str(exc) or 'Invalid transfer file'},400);return
         if not self.headers.get('Content-Type','').startswith('application/json'):
             self.respond({'error':'Expected JSON'},415);return
         try:
@@ -185,6 +217,8 @@ class Handler(BaseHTTPRequestHandler):
                     if not isinstance(guessed,bool):raise ValueError('Invalid guessed value')
                     correct=selected==q['correct_answer']
                     cur=db.execute('INSERT INTO attempts(question_id,selected_answer,is_correct,guessed) VALUES (?,?,?,?)',(qid,selected,int(correct),int(guessed)))
+                    db.execute('UPDATE attempts SET answered_at=? WHERE id=?',(transfer.now(),cur.lastrowid))
+                    db.execute('INSERT INTO attempt_ids VALUES (?,?)',(cur.lastrowid,transfer.uid()))
                     review=int(not correct or guessed)
                     db.execute('INSERT INTO review_state(question_id,needs_review) VALUES (?,?) ON CONFLICT(question_id) DO UPDATE SET needs_review=excluded.needs_review,updated_at=CURRENT_TIMESTAMP',(qid,review))
                     result=dict(attempt_id=cur.lastrowid,is_correct=correct,correct_answer=q['correct_answer'],explanation_html=q['explanation_html'],needs_review=review)
@@ -209,6 +243,9 @@ class Handler(BaseHTTPRequestHandler):
                         db.execute('INSERT OR IGNORE INTO question_tags VALUES (?,?)',(qid,tid))
                     result={'saved':True}
                 else:self.respond({'error':'Not found'},404);return
+                table={'/api/note':'notes','/api/difficulty':'personal_difficulty','/api/review':'review_state','/api/attempt':'review_state'}.get(self.path)
+                if table:db.execute('UPDATE '+table+' SET updated_at=? WHERE question_id=?',(transfer.now(),qid))
+                transfer.capture(db)
             self.respond(result)
         except (ValueError,TypeError,KeyError) as exc:self.respond({'error':str(exc)},400)
         except Exception:

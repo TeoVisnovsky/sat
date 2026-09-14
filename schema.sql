@@ -17,3 +17,8 @@ CREATE INDEX IF NOT EXISTS idx_attempts_question_date ON attempts(question_id,an
 CREATE INDEX IF NOT EXISTS idx_question_tags_tag ON question_tags(tag_id,question_id);
 CREATE INDEX IF NOT EXISTS idx_review_due ON review_state(needs_review,next_review_at);
 CREATE TABLE IF NOT EXISTS official_references(question_id TEXT PRIMARY KEY REFERENCES questions(id),official_id TEXT NOT NULL,external_id TEXT NOT NULL,match_method TEXT NOT NULL,recovered_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+-- Added automatically when opening an older database. These IDs survive file transfers.
+CREATE TABLE IF NOT EXISTS transfer_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS attempt_ids(attempt_id INTEGER PRIMARY KEY REFERENCES attempts(id),sync_id TEXT NOT NULL UNIQUE);
+CREATE TABLE IF NOT EXISTS note_versions(id TEXT PRIMARY KEY,question_id TEXT NOT NULL REFERENCES questions(id),content TEXT NOT NULL,updated_at TEXT NOT NULL,parents TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS state_versions(kind TEXT NOT NULL,question_id TEXT NOT NULL REFERENCES questions(id),id TEXT NOT NULL,updated_at TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(kind,question_id));

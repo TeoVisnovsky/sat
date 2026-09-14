@@ -6,6 +6,7 @@ let meta,questions=[],current=null,answered=false,busy=false,loadVersion=0,listV
 let noteTimer,searchTimer,toastTimer,noteQueue=Promise.resolve();
 const pendingNotes=new Map();
 async function api(path,data){
+ if(window.SATOffline)return SATOffline.request(bank,path,data);
  const r=await fetch('/api/'+path+(data===undefined?(path.includes('?')?'&':'?')+'bank='+encodeURIComponent(bank):''),data===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-SAT-Bank':bank},body:JSON.stringify(data)});
  const value=await r.json();if(!r.ok)throw Error(value.error||'Something went wrong');return value;
 }
@@ -41,9 +42,9 @@ function renderQuestion(){
  const q=current;const pos=questions.findIndex(x=>x.id===q.id);
  $('workspace').innerHTML=`<div class="question-top"><span>${pos>=0?`${pos+1} of ${questions.length} · `:''}${q.id}</span><div class="question-actions"><button id="copyLink">Copy link</button><button id="reviewToggle">${q.needs_review?'✓ In review':'Mark for review'}</button></div></div>
  <p class="eyebrow">${esc(q.domain)}</p><div class="question-title"><h2>${esc(q.skill)}</h2><span class="badge">${q.difficulty[0].toUpperCase()+q.difficulty.slice(1)}</span><span class="badge" id="stateBadge">${stateLabel(q)}</span></div>
- <div class="passage-text">${q.passage_html}</div>
+ <div class="passage-text">${SATCore.html(q.passage_html)}</div>
  <details class="transcript" ${q.assets.length?'':'hidden'}><summary>Original PDF passage</summary>${q.assets.map(a=>`<img class="passage-image" src="/${esc(a.file_path)}" alt="${esc(a.alt_text)}">`).join('')}</details>
- <div class="instruction">${q.prompt_html||'Choose the best answer.'}</div><div class="choices">${q.choices.map(c=>`<button class="choice" aria-pressed="false" data-letter="${c.letter}"><span class="letter">${c.letter}</span><span>${c.content_html}</span></button>`).join('')}</div>
+ <div class="instruction">${SATCore.html(q.prompt_html)||'Choose the best answer.'}</div><div class="choices">${q.choices.map(c=>`<button class="choice" aria-pressed="false" data-letter="${c.letter}"><span class="letter">${c.letter}</span><span>${SATCore.html(c.content_html)}</span></button>`).join('')}</div>
  <div class="check-row"><label class="confidence"><input type="checkbox" id="guessed"> I am unsure / guessing</label><button id="checkAnswer" class="primary" disabled>Check</button></div><div id="feedback" aria-live="polite"></div>
  <div class="next-row"><span class="secondary-info" id="attemptInfo">${q.attempt_count?`${q.attempt_count} previous attempt${q.attempt_count===1?'':'s'} · answer again to check`:'Not attempted yet'}</span><button id="nextQuestion" class="primary">Next question →</button></div>
  <button id="showNotes" class="text-button">Show notes without answering</button><div id="notesPanel" hidden><div class="notes-heading"><label for="note">Your notes</label><span class="save-status" id="saveStatus">${q.note?'Saved':'Autosaves'}</span></div>
@@ -74,7 +75,7 @@ async function answer(letter){
   const result=await api('attempt',{question_id:qid,answer:letter,guessed:$('guessed').checked});
   if(version!==loadVersion){await refreshProgress();return;}answered=true;$('checkAnswer').textContent='Checked';$('notesPanel').hidden=false;$('showNotes').hidden=true;current.needs_review=result.needs_review;current.latest_correct=+result.is_correct;
   $('workspace').querySelectorAll('.choice').forEach(b=>{if(b.dataset.letter===result.correct_answer)b.classList.add('correct');if(b.dataset.letter===letter&&!result.is_correct)b.classList.add('wrong');});
-  $('feedback').innerHTML=`<div class="feedback"><h3>${result.is_correct?'Correct.':`Not quite. The correct answer is ${result.correct_answer}.`}</h3><span class="secondary-info">${result.needs_review?'Saved to your review queue.':'Attempt saved.'}</span><details ${result.is_correct?'':'open'}><summary>Why this answer works</summary>${result.explanation_html}</details></div>`;
+  $('feedback').innerHTML=`<div class="feedback"><h3>${result.is_correct?'Correct.':`Not quite. The correct answer is ${result.correct_answer}.`}</h3><span class="secondary-info">${result.needs_review?'Saved to your review queue.':'Attempt saved.'}</span><details ${result.is_correct?'':'open'}><summary>Why this answer works</summary>${SATCore.html(result.explanation_html)}</details></div>`;
   $('feedback').querySelector('.feedback details').insertAdjacentHTML('beforebegin',`<fieldset class="difficulty-rating"><legend>How did this feel?</legend><div>${['easy','medium','hard'].map(r=>`<button type="button" data-rating="${r}" aria-pressed="${current.my_difficulty===r}">${r[0].toUpperCase()+r.slice(1)}</button>`).join('')}</div><span id="ratingStatus" role="status">${current.my_difficulty?'Previous rating: '+current.my_difficulty+'. Change it if needed.':'Your rating is separate from the official difficulty.'}</span></fieldset>`);
   $('feedback').querySelectorAll('[data-rating]').forEach(b=>b.onclick=safe(async()=>{
    const rating=b.dataset.rating;
@@ -98,16 +99,24 @@ async function init(){
  document.addEventListener('keydown',e=>{if(e.key==='Escape'){$('bankMenu').open=false;}});
  const banks=await api('banks');
  $('bankSelect').innerHTML=banks.map(b=>`<option value="${esc(b.id)}">${esc(b.name)}</option>`).join('');$('bankSelect').value=bank;
- document.querySelector('.backup').href='/api/backup?bank='+encodeURIComponent(bank);
- $('bankSelect').onchange=safe(async()=>{if(busy){$('bankSelect').value=bank;toast('Wait for your answer to finish saving.');return;}const next=$('bankSelect').value;try{await flushNotes();location.href='/?bank='+encodeURIComponent(next);}catch(e){$('bankSelect').value=bank;throw e;}});
+ $('sqliteBackup').href='/api/backup?bank='+encodeURIComponent(bank);$('sqliteBackup').hidden=!!window.SATOffline;
+ $('sqliteBackup').onclick=safe(async e=>{e.preventDefault();if(busy){toast('Wait for your answer to finish saving.');return;}await flushNotes();location.href=$('sqliteBackup').href;});
+ $('exportBank').onclick=safe(async()=>{if(busy){toast('Wait for your answer to finish saving.');return;}await flushNotes();const data=await api('export');data.bank.name=$('bankSelect').selectedOptions[0].textContent;const blob=new Blob([JSON.stringify(data)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='sat-'+new Date().toISOString().slice(0,10)+'.satbank.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),60000);toast('Export ready. Keep the file for transfer or backup.');});
+ $('bankSelect').onchange=safe(async()=>{if(busy){$('bankSelect').value=bank;toast('Wait for your answer to finish saving.');return;}const next=$('bankSelect').value;try{await flushNotes();location.href=location.pathname+'?bank='+encodeURIComponent(next);}catch(e){$('bankSelect').value=bank;throw e;}});
  $('uploadBank').onclick=()=>$('bankFile').click();
- $('bankFile').onchange=safe(async()=>{
-  const file=$('bankFile').files[0];if(!file)return;
-  if(busy){toast('Wait for your answer to finish saving.');return;}
-  await flushNotes();$('uploadBank').disabled=true;$('uploadBank').textContent='Importing…';
-  try{const response=await fetch('/api/banks/import',{method:'POST',headers:{'Content-Type':'application/octet-stream','X-Filename':encodeURIComponent(file.name)},body:file});const data=await response.json();if(!response.ok)throw Error(data.error);location.href='/?bank='+encodeURIComponent(data.id);}
-  finally{$('uploadBank').disabled=false;$('uploadBank').textContent='Add database';$('bankFile').value='';}
- });
+ let importFile=null,importing=false;
+ $('bankFile').onchange=()=>{importFile=$('bankFile').files[0];if(!importFile)return;$('importDescription').textContent=importFile.name+' → '+$('bankSelect').selectedOptions[0].textContent;$('importStatus').textContent='';$('importDialog').showModal();};
+ $('cancelImport').onclick=()=>{$('importDialog').close();$('bankFile').value='';importFile=null;};
+ $('importDialog').addEventListener('cancel',e=>{if(importing)e.preventDefault();});
+ async function importSelected(mode){
+  if(!importFile||importing)return;if(busy){toast('Wait for your answer to finish saving.');return;}await flushNotes();importing=true;
+  for(const id of ['mergeBank','addBank','cancelImport'])$(id).disabled=true;$('importStatus').textContent='Importing…';
+  try{let data;if(window.SATOffline)data=await SATOffline.importFile(bank,importFile,mode);else{const response=await fetch('/api/banks/import',{method:'POST',headers:{'Content-Type':'application/octet-stream','X-Filename':encodeURIComponent(importFile.name),'X-Import-Mode':mode,'X-SAT-Bank':bank},body:importFile});data=await response.json();if(!response.ok)throw Error(data.error);}
+   sessionStorage.setItem('sat-import-result',mode==='merge'?`Merged: ${data.questions_added} new questions, ${data.attempts_added} new attempts.${data.note_conflicts?' Both note versions kept on '+data.note_conflicts+' question(s). Open notes to review and edit them.':''}`:'Database added.');location.href=location.pathname+'?bank='+encodeURIComponent(data.id);
+  }catch(e){$('importStatus').textContent=e.message;}finally{importing=false;for(const id of ['mergeBank','addBank','cancelImport'])$(id).disabled=false;}
+ }
+ $('mergeBank').onclick=safe(()=>importSelected('merge'));$('addBank').onclick=safe(()=>importSelected('add'));
+ if(window.SATOffline)SATOffline.setup().catch(fail);
  $('mobileFilters').onclick=()=>{const open=$('practiceView').classList.toggle('filters-open');$('mobileFilters').setAttribute('aria-expanded',String(open));};
  meta=await api('meta');$('domain').innerHTML+=[...meta.domains].map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join('');fillSkills();fillTags();
  for(const k of ['domain','skill','difficulty','status','my_difficulty','tag'])$(k).onchange=safe(async()=>{if(k==='domain'){$('skill').value='';fillSkills();}await loadList();});
@@ -118,6 +127,8 @@ async function init(){
  const initial=new URLSearchParams(location.hash.slice(1)).get('q');await loadList(false);await stats();if(initial)await openQuestion(initial);else if(questions.length)await openQuestion(questions[0].id);else $('workspace').innerHTML='<div class="empty"><h2>This bank is empty.</h2><p>Choose another database to start practicing.</p></div>';
  window.addEventListener('hashchange',safe(async()=>{const id=new URLSearchParams(location.hash.slice(1)).get('q');if(id&&id!==current?.id)await openQuestion(id);}));
  window.addEventListener('beforeunload',e=>{if(pendingNotes.size){e.preventDefault();e.returnValue='';}});
+ document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'&&pendingNotes.size)flushNotes().catch(fail);});
  document.addEventListener('keydown',e=>{if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)||e.ctrlKey||e.metaKey||e.altKey||$('practiceView').hidden)return;if(/^[a-d]$/i.test(e.key)&&current&&!answered)selectAnswer(e.key.toUpperCase());});
+ const imported=sessionStorage.getItem('sat-import-result');if(imported){sessionStorage.removeItem('sat-import-result');$('error').textContent=imported;$('error').classList.add('success');$('error').hidden=false;}
 }
 safe(init)();
