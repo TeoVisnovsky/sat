@@ -5,14 +5,25 @@ let selectedAnswer=null;
 let meta,questions=[],current=null,answered=false,busy=false,loadVersion=0,listVersion=0;
 let noteTimer,searchTimer,toastTimer,noteQueue=Promise.resolve();
 const pendingNotes=new Map();
-// The header follows the open bank so English and Math are never mistaken for each other.
-function showBankName(banks){
- const name=banks.find(b=>b.id===bank)?.name||'';
- const subject=name.replace(/^SAT\s*/i,'').split('·')[0].trim()||'Practice';
- $('brandSubject').textContent=' / '+subject;
- document.title='SAT · '+subject+' practice';
+// One tap moves between English and Math; the open bank is always visible in the header.
+const SUBJECTS=[{id:'main',label:'English'},{id:'math',label:'Math'}];
+const shortName=name=>name.replace(/^SAT\s*/i,'').split('·')[0].trim()||name;
+const switchBank=safe(async next=>{
+ if(next===bank)return;
+ if(busy){$('bankSelect').value=bank;toast('Wait for your answer to finish saving.');return;}
+ try{await flushNotes();location.href=location.pathname+'?bank='+encodeURIComponent(next);}
+ catch(e){$('bankSelect').value=bank;throw e;}
+});
+function fillSubjects(banks){
+ const items=SUBJECTS.filter(s=>banks.some(b=>b.id===s.id));
+ const extra=banks.find(b=>b.id===bank&&!items.some(s=>s.id===b.id));
+ if(extra)items.push({id:extra.id,label:shortName(extra.name)});
+ const box=$('subjectSwitch');
+ box.innerHTML=items.length>1?items.map(s=>`<button type="button" data-bank="${esc(s.id)}"${s.id===bank?' class="active" aria-current="page"':''}>${esc(s.label)}</button>`).join(''):'';
+ box.querySelectorAll('[data-bank]').forEach(b=>b.onclick=()=>switchBank(b.dataset.bank));
+ document.title='SAT · '+(shortName(banks.find(b=>b.id===bank)?.name||'')||'practice')+' practice';
 }
-const fillBanks=banks=>{$('bankSelect').innerHTML=banks.map(b=>`<option value="${esc(b.id)}">${esc(b.name)}</option>`).join('');$('bankSelect').value=bank;showBankName(banks);};
+const fillBanks=banks=>{$('bankSelect').innerHTML=banks.map(b=>`<option value="${esc(b.id)}">${esc(b.name)}</option>`).join('');$('bankSelect').value=bank;fillSubjects(banks);};
 const noteParents=new Map();
 async function api(path,data){
  if(window.SATOffline)return SATOffline.request(bank,path,data);
@@ -105,7 +116,7 @@ async function nextQuestion(){
  if(!next){if(questions.length>1)next=questions.find(q=>q.id!==current?.id);else if(questions.length===1&&questions[0].id!==current?.id)next=questions[0];}
  if(next){await openQuestion(next.id);if(innerWidth<720)$('workspace').scrollIntoView({behavior:'smooth'});}else toast('You’ve reached the end of this selection. Try another filter.');
 }
-function showView(progress){$('practiceView').hidden=progress;$('progressView').hidden=!progress;$('practiceTab').classList.toggle('active',!progress);$('progressTab').classList.toggle('active',progress);}
+function showView(progress){$('practiceView').hidden=progress;$('progressView').hidden=!progress;$('progressTab').classList.toggle('active',progress);$('progressTab').textContent=progress?'← Practice':'Progress';}
 async function init(){
  document.addEventListener('click',e=>{if(!$('bankMenu').contains(e.target))$('bankMenu').open=false;});
  document.addEventListener('click',e=>{if(!$('accountMenu').contains(e.target))$('accountMenu').open=false;});
@@ -116,7 +127,7 @@ async function init(){
  $('openWebApp').hidden=!!window.SATOffline;
  $('sqliteBackup').onclick=safe(async e=>{e.preventDefault();if(busy){toast('Wait for your answer to finish saving.');return;}await flushNotes();location.href=$('sqliteBackup').href;});
  $('exportBank').onclick=safe(async()=>{if(busy){toast('Wait for your answer to finish saving.');return;}await flushNotes();const data=await api('export');data.bank.name=$('bankSelect').selectedOptions[0].textContent;const blob=new Blob([JSON.stringify(data)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='sat-'+new Date().toISOString().slice(0,10)+'.satbank.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),60000);toast('Export ready. Keep the file for transfer or backup.');});
- $('bankSelect').onchange=safe(async()=>{if(busy){$('bankSelect').value=bank;toast('Wait for your answer to finish saving.');return;}const next=$('bankSelect').value;try{await flushNotes();location.href=location.pathname+'?bank='+encodeURIComponent(next);}catch(e){$('bankSelect').value=bank;throw e;}});
+ $('bankSelect').onchange=()=>switchBank($('bankSelect').value);
  $('uploadBank').onclick=()=>$('bankFile').click();
  let importFile=null,importing=false;
  $('bankFile').onchange=()=>{importFile=$('bankFile').files[0];if(!importFile)return;$('importDescription').textContent=importFile.name+' → '+$('bankSelect').selectedOptions[0].textContent;$('importStatus').textContent='';$('importDialog').showModal();};
@@ -137,7 +148,7 @@ async function init(){
  $('search').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(safe(()=>loadList()),250);};
  $('unseen').onclick=safe(async()=>{$('status').value='unseen';await loadList();});$('mistakes').onclick=safe(async()=>{$('status').value='review';await loadList();});
  $('clear').onclick=safe(async()=>{for(const k of ['domain','skill','difficulty','status','my_difficulty','tag','search'])$(k).value='';fillSkills();await loadList();});
- $('practiceTab').onclick=()=>showView(false);$('progressTab').onclick=safe(async()=>{await flushNotes();showView(true);await stats();});
+ $('progressTab').onclick=safe(async()=>{if(!$('progressView').hidden){showView(false);return;}await flushNotes();showView(true);await stats();});
  const initial=new URLSearchParams(location.hash.slice(1)).get('q');await loadList(false);await stats();if(initial)await openQuestion(initial);else if(questions.length)await openQuestion(questions[0].id);else $('workspace').innerHTML='<div class="empty"><h2>This bank is empty.</h2><p>Choose another database to start practicing.</p></div>';
  window.addEventListener('hashchange',safe(async()=>{const id=new URLSearchParams(location.hash.slice(1)).get('q');if(id&&id!==current?.id)await openQuestion(id);}));
  window.addEventListener('beforeunload',e=>{if(pendingNotes.size){e.preventDefault();e.returnValue='';}});

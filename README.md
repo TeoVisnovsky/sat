@@ -4,7 +4,7 @@ A minimal SAT practice app with two separate question banks — **753 Reading & 
 
 ## Start on PC or phone
 
-Open **[SAT Trainer](https://teovisnovsky.github.io/sat/)** and choose **Account → Sign in with Google** on each device. Switch between the English and Math banks under **Databases → Database**; the header shows which one is open. Each bank keeps its own questions, attempts, notes, ratings, tags and progress. Use the same Google account for your own devices. Answers, notes, difficulty ratings and question banks save locally first and sync when the app is open and connected. The header shows **Synced**, **Changes waiting**, or an offline/retry status; click it to retry and open **Account** for details.
+Open **[SAT Trainer](https://teovisnovsky.github.io/sat/)** and choose **Account → Sign in with Google** on each device. Switch between the English and Math banks with the **English / Math** buttons in the header. Each bank keeps its own questions, attempts, notes, ratings, tags and progress. Use the same Google account for your own devices. Answers, notes, difficulty ratings and question banks save locally first and sync when the app is open and connected. The header shows **Synced**, **Changes waiting**, or an offline/retry status; click it to retry and open **Account** for details.
 
 On PC, bookmark the site, use the browser's install option, or double-click **Start SAT Web.url** from the download. You no longer need to keep a local server running. The original Python service remains available below as a separate offline option.
 
@@ -90,7 +90,7 @@ The web app saves on each device and syncs to the signed-in account. Each friend
 
 ## Databases and starting fresh
 
-Open the compact **Databases** menu in the header to switch banks or **Import / merge**.
+Open the **Databases** menu in the header to **Export this database**, **Import / merge**, or pick an imported bank. The **English / Math** buttons beside it switch between the two built-in banks.
 
 - `sat-clean.db` / `sat-math-clean.db`: the included templates with all 753 English and 536 Math questions and no attempts, notes, review flags, personal tags, or difficulty ratings.
 - `sat.db` and `sat-math.db`: your original working banks, created automatically on first launch.
