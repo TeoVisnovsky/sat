@@ -124,15 +124,12 @@ async function nextQuestion(){
    never count time while the app was closed: each tick records when it was last seen alive. */
 const Timers=(function(){
  const QKEY='sat-question-timer-v1:'+bank,PACE_KEY='sat-pace-v1:'+bank,SKEY='sat-set-timer-v1';
- const PRESETS={
-  main:[{id:'module',label:'English module · 32 min · 27 questions',minutes:32,questions:27},{id:'section',label:'English section · 64 min · 54 questions',minutes:64,questions:54}],
-  math:[{id:'module',label:'Math module · 35 min · 22 questions',minutes:35,questions:22},{id:'section',label:'Math section · 70 min · 44 questions',minutes:70,questions:44}]
- };
- const presets=()=>PRESETS[bank]||PRESETS.main;
+ const DEFAULTS={main:{minutes:64,questions:54},math:{minutes:70,questions:44}};
+ const fallback=()=>DEFAULTS[bank]||DEFAULTS.main;
  const read=(k,f)=>{try{const v=JSON.parse(localStorage.getItem(k));return v&&typeof v==='object'?v:f;}catch(e){return f;}};
  const save=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}};
  const clamp=(n,lo,hi)=>Math.min(hi,Math.max(lo,n));
- let pace=read(PACE_KEY,null)||{...presets()[1]};
+ let pace=read(PACE_KEY,null)||{...fallback()};
  let q=read(QKEY,null)||{qid:null,ms:0,since:null,seen:0,manual:false,done:false};
  let set=read(SKEY,null)||{mode:'up',ms:0,since:null,seen:0,answered:0};
  let ticker=null,writes=0;
@@ -148,22 +145,24 @@ const Timers=(function(){
  function persist(force){if(force||++writes%4===0){q.seen=set.seen=Date.now();save(QKEY,q);save(SKEY,set);}}
  function loop(){if(!ticker)ticker=setInterval(()=>{paint();persist();},500);}
  function paint(){
-  const ms=live(q),target=paceMs(),over=ms-target,chip=$('questionTimer');
+  const ms=live(q),target=paceMs(),over=ms-target,chip=$('questionTimer'),paused=!q.since&&!q.done;
   $('timerTime').textContent=clock(ms);
   $('timerIcon').textContent=q.done?'\u2713':q.since?'\u275A\u275A':'\u25B6';
-  chip.classList.toggle('paused',!q.since&&!q.done);
+  chip.classList.toggle('paused',paused);
   chip.classList.toggle('over',over>0);
   chip.classList.toggle('close',over<=0&&target>0&&ms/target>=.75);
-  chip.setAttribute('aria-label',(q.done?'Answered in ':'Question timer ')+clock(ms)+(q.done?'':q.since?', running. Press to pause.':', paused. Press to resume.'));
+  $('timerToggle').setAttribute('aria-label',(q.done?'Answered in ':'Question timer ')+clock(ms)+(q.done?'':q.since?', running. Press to pause.':', paused. Press to resume.'));
   $('timerFill').style.width=(clamp(target?ms/target:0,0,1)*100).toFixed(1)+'%';
   $('timerDelta').textContent=target?(over>0?'+'+clock(over):'\u2212'+clock(-over)):'';
+  $('timerDelta').disabled=!paused;
+  $('timerDelta').title=paused?'Reset this question to 0:00':'';
   const running=!!set.since||set.ms>0,elapsed=live(set),left=targetMs()-elapsed;
   $('timerSummary').textContent=running?(set.mode==='down'?clock(Math.max(0,left))+' left':clock(elapsed)):'Timers';
   $('timerMenu').classList.toggle('warning',running&&set.mode==='down'&&left<=300000&&left>0);
   $('timerMenu').classList.toggle('over',running&&set.mode==='down'&&left<=0);
   $('setStatus').textContent=running?clock(elapsed)+' elapsed \u00b7 '+set.answered+' answered'+(set.answered?' \u00b7 '+clock(elapsed/set.answered)+' average':'')+(set.mode==='down'&&left<=0?' \u00b7 time is up':''):'Not started.';
-  $('setStart').textContent=set.since?'Pause set timer':(set.ms?'Resume set timer':'Start set timer');
-  $('paceInfo').textContent=clock(paceMs())+' per question \u00b7 '+pace.minutes+' min for '+pace.questions+' questions';
+  $('setStart').textContent=set.since?'Pause':(set.ms?'Resume':'Start');
+  $('paceInfo').textContent=clock(paceMs())+' per question · '+clock(targetMs())+' total';
  }
  function startQuestion(id){
   // Reopening an answered question starts a new sitting, otherwise a second attempt would
@@ -183,7 +182,8 @@ const Timers=(function(){
   else{q.since=Date.now();q.manual=false;}
   persist(true);paint();
  }
- function resetQuestion(){q={qid:q.qid,ms:0,since:Date.now(),seen:Date.now(),manual:false,done:false};persist(true);paint();}
+ // Resetting changes the number, never whether the clock is running.
+ function resetQuestion(){q={qid:q.qid,ms:0,since:q.since?Date.now():null,seen:Date.now(),manual:q.manual,done:false};persist(true);paint();}
  function countAnswer(){if(set.since){set.answered++;persist(true);paint();}}
  function toggleSet(){
   if(set.since){set.ms+=Math.max(0,Date.now()-set.since);set.since=null;}
@@ -191,27 +191,15 @@ const Timers=(function(){
   persist(true);paint();
  }
  function resetSet(){set={mode:set.mode,ms:0,since:null,seen:Date.now(),answered:0};persist(true);paint();}
- function fillPace(){
-  $('paceSelect').innerHTML=presets().map(p=>`<option value="${p.id}">${esc(p.label)}</option>`).join('')+'<option value="custom">Custom\u2026</option>';
-  const match=presets().find(p=>p.minutes===pace.minutes&&p.questions===pace.questions);
-  $('paceSelect').value=match?match.id:'custom';
-  $('paceCustom').hidden=!!match;
-  $('paceMinutes').value=pace.minutes;$('paceQuestions').value=pace.questions;
- }
+ function fillPace(){$('paceMinutes').value=pace.minutes;$('paceQuestions').value=pace.questions;}
  function init(){
   hydrate(q);hydrate(set);
   fillPace();$('setMode').value=set.mode;
-  $('questionTimer').onclick=toggleQuestion;
-  $('timerReset').onclick=resetQuestion;
+  $('timerToggle').onclick=toggleQuestion;
+  $('timerDelta').onclick=resetQuestion;
   $('setStart').onclick=toggleSet;
   $('setReset').onclick=resetSet;
   $('setMode').onchange=()=>{set.mode=$('setMode').value;persist(true);paint();};
-  $('paceSelect').onchange=()=>{
-   const chosen=presets().find(p=>p.id===$('paceSelect').value);
-   if(chosen)pace={minutes:chosen.minutes,questions:chosen.questions};
-   $('paceCustom').hidden=!!chosen;
-   save(PACE_KEY,pace);fillPace();paint();
-  };
   for(const id of ['paceMinutes','paceQuestions'])$(id).oninput=()=>{
    pace={minutes:clamp(Math.round(+$('paceMinutes').value||1),1,600),questions:clamp(Math.round(+$('paceQuestions').value||1),1,200)};
    save(PACE_KEY,pace);paint();
