@@ -133,11 +133,14 @@ class Handler(BaseHTTPRequestHandler):
                 done=db.execute('SELECT COUNT(DISTINCT question_id) FROM attempts').fetchone()[0]
                 first=db.execute("SELECT COUNT(*),COALESCE(SUM(is_correct),0) FROM attempts a WHERE id=(SELECT id FROM attempts WHERE question_id=a.question_id ORDER BY julianday(answered_at),COALESCE((SELECT sync_id FROM attempt_ids WHERE attempt_id=attempts.id),printf('%020d',id)) LIMIT 1)").fetchone()
                 review=db.execute('SELECT COUNT(*) FROM review_state WHERE needs_review=1').fetchone()[0]
+                timed=db.execute('SELECT COUNT(*),AVG(elapsed_ms) FROM attempts WHERE elapsed_ms IS NOT NULL').fetchone()
                 skills=[dict(r) for r in db.execute('''SELECT s.name,s.id,COUNT(q.id) total,
-                SUM(CASE WHEN a.id IS NOT NULL THEN 1 ELSE 0 END) done,COALESCE(SUM(a.is_correct),0) correct
+                SUM(CASE WHEN a.id IS NOT NULL THEN 1 ELSE 0 END) done,COALESCE(SUM(a.is_correct),0) correct,
+                AVG(a.elapsed_ms) average_ms
                 FROM skills s JOIN questions q ON q.skill_id=s.id LEFT JOIN attempts a
                 ON a.id=(SELECT id FROM attempts WHERE question_id=q.id ORDER BY julianday(answered_at),COALESCE((SELECT sync_id FROM attempt_ids WHERE attempt_id=attempts.id),printf('%020d',id)) LIMIT 1) GROUP BY s.id''')]
-                self.respond(dict(total=total,done=done,first_correct=first[1],review=review,skills=skills));return
+                for k in skills:k['average_ms']=round(k['average_ms']) if k['average_ms'] is not None else None
+                self.respond(dict(total=total,done=done,first_correct=first[1],review=review,timed=timed[0],average_ms=round(timed[1]) if timed[1] is not None else None,skills=skills));return
             if path.startswith('/api/question/'):
                 qid=path.rsplit('/',1)[-1];row=db.execute(BASE+' WHERE q.id=?',(qid,)).fetchone()
                 if not row:self.respond({'error':'Question not found'},404);return
@@ -219,8 +222,9 @@ class Handler(BaseHTTPRequestHandler):
                     selected=data.get('answer');guessed=data.get('guessed',False)
                     if not isinstance(selected,str) or len(selected)>30 or (q['answer_type']=='choice' and selected not in ('A','B','C','D')) or (q['answer_type']=='numeric' and transfer.numeric(selected) is None):raise ValueError('Choose A, B, C, or D' if q['answer_type']=='choice' else 'Enter a number, decimal, or fraction')
                     if not isinstance(guessed,bool):raise ValueError('Invalid guessed value')
+                    spent=transfer.elapsed(data.get('elapsed_ms'))
                     selected=selected.strip().replace('−','-');question=dict(q);question['accepted_answers']=json.loads(q['accepted_answers']);correct=transfer.answer_correct(question,selected)
-                    cur=db.execute('INSERT INTO attempts(question_id,selected_answer,is_correct,guessed) VALUES (?,?,?,?)',(qid,selected,int(correct),int(guessed)))
+                    cur=db.execute('INSERT INTO attempts(question_id,selected_answer,is_correct,guessed,elapsed_ms) VALUES (?,?,?,?,?)',(qid,selected,int(correct),int(guessed),spent))
                     db.execute('UPDATE attempts SET answered_at=? WHERE id=?',(transfer.now(),cur.lastrowid))
                     db.execute('INSERT INTO attempt_ids VALUES (?,?)',(cur.lastrowid,transfer.uid()))
                     review=int(not correct or guessed)

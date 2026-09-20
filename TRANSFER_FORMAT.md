@@ -5,7 +5,7 @@ The UTF-8 JSON envelope has `format: "sat-bank"`, `version: 1`, a `bank` object 
 | Array | Record fields |
 | --- | --- |
 | `questions` | `id`, `domain`, `skill`, `difficulty`, `passage_html`, `prompt_html`, `correct_answer`, `explanation_html`, `choices` (`letter`, `content_html`), `sources` (`filename`, `file_sha256`, `page_start`, `page_end`) |
-| `attempts` | globally unique `id`, `question_id`, `selected_answer`, `is_correct` (0/1), `guessed` (0/1), `answered_at` |
+| `attempts` | globally unique `id`, `question_id`, `selected_answer`, `is_correct` (0/1), `guessed` (0/1), `elapsed_ms` (integer milliseconds or `null`), `answered_at` |
 | `notes` | globally unique `id`, `question_id`, `content`, `updated_at`, `parents` (superseded note revision IDs) |
 | `ratings` | `id`, `question_id`, `rating` (easy/medium/hard), `updated_at` |
 | `reviews` | `id`, `question_id`, `needs_review` (0/1), `updated_at` |
@@ -24,6 +24,8 @@ Question fields are compared exactly; sources are combined. Any differing existi
 Attempts and note revisions are unioned by ID. Note parents must exist in the same question's revision graph, which must be acyclic. Current notes are the graph leaves; equal leaf text is displayed once. Concurrent different leaves are displayed together, retaining every revision. Saving that combined editor creates a revision whose parents are all current leaves, resolving them. Reimporting ancestors cannot resurrect resolved text.
 
 Ratings and review state use maximum `(updated_at, id)` per question. Attempt ordering is chronological with a stable ID tie-breaker; first-attempt accuracy refers to the earliest known attempt, including older history imported later. Tags use case-insensitive union; tag deletions have no tombstones in v1.
+
+`elapsed_ms` is how long the question was open, excluding time paused or spent in another tab. It is additive metadata rather than history: a file written before timing existed simply omits it, validation normalises that to `null`, and merging fills a `null` from the other side instead of reporting a conflict. It never takes part in identity comparison.
 
 Merge does not remove questions or attempts. There is no automatic relationship between two independently added banks; the user chooses the destination. Device clocks must be reasonably correct for timestamps to reflect edit order.
 

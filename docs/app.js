@@ -49,8 +49,8 @@ async function loadList(selectFirst=true){
 }
 async function stats(){
  const s=await api('stats');$('totalCount').textContent=s.total;$('doneCount').textContent=`${s.done} of ${s.total} completed`;$('completion').max=s.total;$('completion').value=s.done;
- $('statsCards').innerHTML=`<div class="stat"><strong>${s.done}<small class="secondary-info"> / ${s.total}</small></strong><span>Questions completed</span></div><div class="stat"><strong>${s.done?Math.round(100*s.first_correct/s.done)+'%':'—'}</strong><span>First-attempt accuracy</span></div><div class="stat"><strong>${s.review}</strong><span>Need another look</span></div>`;
- $('skillStats').innerHTML=s.skills.map(k=>`<div class="skill-stat"><button data-skill="${k.id}">${esc(k.name)}</button><div><small>${k.done} / ${k.total} completed</small><progress value="${k.done}" max="${k.total}"></progress></div><div class="accuracy">${k.done?Math.round(100*k.correct/k.done)+'%':'—'}<br><small>accuracy</small></div></div>`).join('');
+ $('statsCards').innerHTML=`<div class="stat"><strong>${s.done}<small class="secondary-info"> / ${s.total}</small></strong><span>Questions completed</span></div><div class="stat"><strong>${s.done?Math.round(100*s.first_correct/s.done)+'%':'—'}</strong><span>First-attempt accuracy</span></div><div class="stat"><strong>${s.review}</strong><span>Need another look</span></div><div class="stat"><strong>${s.average_ms==null?'—':Timers.clock(s.average_ms)}</strong><span>Average per question${s.timed?` · ${s.timed} timed`:''}</span></div>`;
+ $('skillStats').innerHTML=s.skills.map(k=>`<div class="skill-stat"><button data-skill="${k.id}">${esc(k.name)}</button><div><small>${k.done} / ${k.total} completed</small><progress value="${k.done}" max="${k.total}"></progress></div><div class="accuracy">${k.done?Math.round(100*k.correct/k.done)+'%':'—'}<br><small>accuracy</small></div><div class="accuracy">${k.average_ms==null?'—':Timers.clock(k.average_ms)}<br><small>average</small></div></div>`).join('');
  $('skillStats').querySelectorAll('button').forEach(b=>b.onclick=safe(async()=>{showView(false);$('domain').value='';fillSkills();$('skill').value=b.dataset.skill;for(const k of ['difficulty','status','my_difficulty','tag','search'])$(k).value='';await loadList();}));
 }
 async function flushNotes(){clearTimeout(noteTimer);await noteQueue;if(pendingNotes.size){const batch=[...pendingNotes];noteQueue=(async()=>{for(const [question_id,content] of batch){const result=await api('note',{question_id,content,parents:noteParents.get(question_id)});if(result.note_parents)noteParents.set(question_id,result.note_parents);if(pendingNotes.get(question_id)===content)pendingNotes.delete(question_id);if(current?.id===question_id&&$('saveStatus'))$('saveStatus').textContent=pendingNotes.has(question_id)?'Saving…':'Saved';}})();try{await noteQueue;}catch(e){noteQueue=Promise.resolve();if($('saveStatus'))$('saveStatus').textContent='Not saved — retry below';throw e;}}}
@@ -71,7 +71,8 @@ function renderQuestion(){
  <button id="showNotes" class="text-button">Show notes without answering</button><div id="notesPanel" hidden><div class="notes-heading"><label for="note">Your notes</label><span class="save-status" id="saveStatus">${q.note?'Saved':'Autosaves'}</span></div>
  <textarea id="note" placeholder="What did I miss? What rule or clue will help next time?">${esc(q.note)}</textarea><button class="text-button" id="saveNote">Save now</button></div>
  <label for="personalTags">Personal tags</label><div class="tag-editor"><input id="personalTags" placeholder="comma splice, vocabulary…" value="${esc(q.tags.join(', '))}"><button id="saveTags">Save tags</button></div>
- <details class="history"><summary>Attempt history (${q.history.length}) & source</summary><ul>${q.history.map(h=>`<li>${esc(h.answered_at)} UTC · ${h.selected_answer} · ${h.is_correct?'Correct':'Incorrect'}${h.guessed?' · Guessed':''}</li>`).join('')||'<li>No attempts yet.</li>'}</ul>${q.sources.map(s=>`<p>${esc(s.filename)} · page ${s.page_start}${s.page_end!==s.page_start?'–'+s.page_end:''}</p>`).join('')}</details>`;
+ <details class="history"><summary>Attempt history (${q.history.length}) & source</summary><ul>${q.history.map(h=>`<li>${esc(h.answered_at)} UTC · ${h.selected_answer} · ${h.is_correct?'Correct':'Incorrect'}${h.guessed?' · Guessed':''}${h.elapsed_ms==null?'':' · '+Timers.clock(h.elapsed_ms)}</li>`).join('')||'<li>No attempts yet.</li>'}</ul>${q.sources.map(s=>`<p>${esc(s.filename)} · page ${s.page_start}${s.page_end!==s.page_start?'–'+s.page_end:''}</p>`).join('')}</details>`;
+ Timers.startQuestion(q.id);
  $('workspace').querySelectorAll('.choice').forEach(b=>b.onclick=()=>selectAnswer(b.dataset.letter));
  if(q.answer_type==='numeric'){$('numericAnswer').oninput=()=>{selectedAnswer=$('numericAnswer').value.trim();$('checkAnswer').disabled=!selectedAnswer;};$('numericAnswer').onkeydown=e=>{if(e.key==='Enter'&&!$('checkAnswer').disabled){e.preventDefault();$('checkAnswer').click();}};}
  $('checkAnswer').onclick=safe(()=>answer(selectedAnswer));
@@ -94,11 +95,13 @@ async function answer(letter){
  if(busy||answered||!current||!letter)return;busy=true;$('checkAnswer').disabled=true;const qid=current.id;const version=loadVersion;
  $('workspace').querySelectorAll('.choice').forEach(b=>b.disabled=true);if($('numericAnswer'))$('numericAnswer').disabled=true;$('guessed').disabled=true;
  try{
-  const result=await api('attempt',{question_id:qid,answer:letter,guessed:$('guessed').checked});
+  const spent=Timers.stopQuestion();
+  const result=await api('attempt',{question_id:qid,answer:letter,guessed:$('guessed').checked,elapsed_ms:spent});
+  Timers.countAnswer();
   if(version!==loadVersion){await refreshProgress();return;}answered=true;$('checkAnswer').textContent='Checked';$('notesPanel').hidden=false;$('showNotes').hidden=true;current.needs_review=result.needs_review;current.latest_correct=+result.is_correct;
   $('workspace').querySelectorAll('.choice').forEach(b=>{if(b.dataset.letter===result.correct_answer)b.classList.add('correct');if(b.dataset.letter===letter&&!result.is_correct)b.classList.add('wrong');});
   const correctLabel=current.answer_type==='numeric'?result.correct_answer.split(',').map(x=>x.trim()).filter(Boolean).join(' or '):result.correct_answer;
-  $('feedback').innerHTML=`<div class="feedback"><h3>${result.is_correct?'Correct.':`Not quite. The correct answer is ${esc(correctLabel)}.`}</h3><span class="secondary-info">${result.needs_review?'Saved to your review queue.':'Attempt saved.'}</span><details ${result.is_correct?'':'open'}><summary>Why this answer works</summary>${SATCore.html(result.explanation_html)}</details></div>`;
+  $('feedback').innerHTML=`<div class="feedback"><h3>${result.is_correct?'Correct.':`Not quite. The correct answer is ${esc(correctLabel)}.`}</h3><span class="secondary-info">${spent===null?'':'Answered in '+Timers.clock(spent)+' · '}${result.needs_review?'Saved to your review queue.':'Attempt saved.'}</span><details ${result.is_correct?'':'open'}><summary>Why this answer works</summary>${SATCore.html(result.explanation_html)}</details></div>`;
   $('feedback').querySelector('.feedback details').insertAdjacentHTML('beforebegin',`<fieldset class="difficulty-rating"><legend>How did this feel?</legend><div>${['easy','medium','hard'].map(r=>`<button type="button" data-rating="${r}" aria-pressed="${current.my_difficulty===r}">${r[0].toUpperCase()+r.slice(1)}</button>`).join('')}</div><span id="ratingStatus" role="status">${current.my_difficulty?'Previous rating: '+current.my_difficulty+'. Change it if needed.':'Your rating is separate from the official difficulty.'}</span></fieldset>`);
   $('feedback').querySelectorAll('[data-rating]').forEach(b=>b.onclick=safe(async()=>{
    const rating=b.dataset.rating;
@@ -107,7 +110,7 @@ async function answer(letter){
    finally{if(version===loadVersion)$('feedback').querySelectorAll('[data-rating]').forEach(x=>x.disabled=false);}
   }));
   $('reviewToggle').textContent=result.needs_review?'✓ In review':'Mark for review';$('stateBadge').textContent=stateLabel(current);$('attemptInfo').textContent='Answer saved';
-  const updated=await api('question/'+qid);if(version===loadVersion){current.history=updated.history;current.attempt_count=updated.attempt_count;const history=$('workspace').querySelector('.history');history.querySelector('summary').textContent=`Attempt history (${updated.history.length}) & source`;history.querySelector('ul').innerHTML=updated.history.map(h=>`<li>${esc(h.answered_at)} UTC · ${h.selected_answer} · ${h.is_correct?'Correct':'Incorrect'}${h.guessed?' · Guessed':''}</li>`).join('');}
+  const updated=await api('question/'+qid);if(version===loadVersion){current.history=updated.history;current.attempt_count=updated.attempt_count;const history=$('workspace').querySelector('.history');history.querySelector('summary').textContent=`Attempt history (${updated.history.length}) & source`;history.querySelector('ul').innerHTML=updated.history.map(h=>`<li>${esc(h.answered_at)} UTC · ${h.selected_answer} · ${h.is_correct?'Correct':'Incorrect'}${h.guessed?' · Guessed':''}${h.elapsed_ms==null?'':' · '+Timers.clock(h.elapsed_ms)}</li>`).join('');}
   await refreshProgress();
  }catch(e){if(version===loadVersion&&!answered){$('workspace').querySelectorAll('.choice').forEach(b=>b.disabled=false);if($('numericAnswer'))$('numericAnswer').disabled=false;$('guessed').disabled=false;$('checkAnswer').disabled=false;}throw e;}finally{if(version===loadVersion)busy=false;}
 }
@@ -116,11 +119,119 @@ async function nextQuestion(){
  if(!next){if(questions.length>1)next=questions.find(q=>q.id!==current?.id);else if(questions.length===1&&questions[0].id!==current?.id)next=questions[0];}
  if(next){await openQuestion(next.id);if(innerWidth<720)$('workspace').scrollIntoView({behavior:'smooth'});}else toast('You’ve reached the end of this selection. Try another filter.');
 }
+/* Timers. A per-question stopwatch with a pace bar, plus a set timer that spans questions.
+   Both survive reloads (switching banks reloads the page), pause when the tab is hidden, and
+   never count time while the app was closed: each tick records when it was last seen alive. */
+const Timers=(function(){
+ const QKEY='sat-question-timer-v1:'+bank,PACE_KEY='sat-pace-v1:'+bank,SKEY='sat-set-timer-v1';
+ const PRESETS={
+  main:[{id:'module',label:'English module · 32 min · 27 questions',minutes:32,questions:27},{id:'section',label:'English section · 64 min · 54 questions',minutes:64,questions:54}],
+  math:[{id:'module',label:'Math module · 35 min · 22 questions',minutes:35,questions:22},{id:'section',label:'Math section · 70 min · 44 questions',minutes:70,questions:44}]
+ };
+ const presets=()=>PRESETS[bank]||PRESETS.main;
+ const read=(k,f)=>{try{const v=JSON.parse(localStorage.getItem(k));return v&&typeof v==='object'?v:f;}catch(e){return f;}};
+ const save=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}};
+ const clamp=(n,lo,hi)=>Math.min(hi,Math.max(lo,n));
+ let pace=read(PACE_KEY,null)||{...presets()[1]};
+ let q=read(QKEY,null)||{qid:null,ms:0,since:null,seen:0,manual:false,done:false};
+ let set=read(SKEY,null)||{mode:'up',ms:0,since:null,seen:0,answered:0};
+ let ticker=null,writes=0;
+ const live=s=>s.ms+(s.since?Math.max(0,Date.now()-s.since):0);
+ const paceMs=()=>Math.round(pace.minutes*60000/pace.questions);
+ const targetMs=()=>Math.round(pace.minutes*60000);
+ function clock(ms){const t=Math.max(0,Math.round(ms/1000));return Math.floor(t/60)+':'+String(t%60).padStart(2,'0');}
+ // A gap larger than a quick reload means the app was shut, so that time is not the user's.
+ function hydrate(s){
+  if(s.since){s.ms+=Math.max(0,(s.seen||s.since)-s.since);s.since=Date.now()-(s.seen||0)<10000?Date.now():null;}
+  return s;
+ }
+ function persist(force){if(force||++writes%4===0){q.seen=set.seen=Date.now();save(QKEY,q);save(SKEY,set);}}
+ function loop(){if(!ticker)ticker=setInterval(()=>{paint();persist();},500);}
+ function paint(){
+  const ms=live(q),target=paceMs(),over=ms-target,chip=$('questionTimer');
+  $('timerTime').textContent=clock(ms);
+  $('timerIcon').textContent=q.done?'\u2713':q.since?'\u275A\u275A':'\u25B6';
+  chip.classList.toggle('paused',!q.since&&!q.done);
+  chip.classList.toggle('over',over>0);
+  chip.classList.toggle('close',over<=0&&target>0&&ms/target>=.75);
+  chip.setAttribute('aria-label',(q.done?'Answered in ':'Question timer ')+clock(ms)+(q.done?'':q.since?', running. Press to pause.':', paused. Press to resume.'));
+  $('timerFill').style.width=(clamp(target?ms/target:0,0,1)*100).toFixed(1)+'%';
+  $('timerDelta').textContent=target?(over>0?'+'+clock(over):'\u2212'+clock(-over)):'';
+  const running=!!set.since||set.ms>0,elapsed=live(set),left=targetMs()-elapsed;
+  $('timerSummary').textContent=running?(set.mode==='down'?clock(Math.max(0,left))+' left':clock(elapsed)):'Timers';
+  $('timerMenu').classList.toggle('warning',running&&set.mode==='down'&&left<=300000&&left>0);
+  $('timerMenu').classList.toggle('over',running&&set.mode==='down'&&left<=0);
+  $('setStatus').textContent=running?clock(elapsed)+' elapsed \u00b7 '+set.answered+' answered'+(set.answered?' \u00b7 '+clock(elapsed/set.answered)+' average':'')+(set.mode==='down'&&left<=0?' \u00b7 time is up':''):'Not started.';
+  $('setStart').textContent=set.since?'Pause set timer':(set.ms?'Resume set timer':'Start set timer');
+  $('paceInfo').textContent=clock(paceMs())+' per question \u00b7 '+pace.minutes+' min for '+pace.questions+' questions';
+ }
+ function startQuestion(id){
+  // Reopening an answered question starts a new sitting, otherwise a second attempt would
+  // inherit the first one's time. A reload mid-question resumes instead.
+  if(q.qid!==id||q.done)q={qid:id,ms:0,since:Date.now(),seen:Date.now(),manual:false,done:false};
+  else if(!q.since&&!q.manual)q.since=Date.now();
+  persist(true);paint();
+ }
+ function stopQuestion(){
+  if(q.since){q.ms+=Math.max(0,Date.now()-q.since);q.since=null;}
+  q.done=true;persist(true);paint();
+  return clamp(Math.round(q.ms),0,7200000);
+ }
+ function toggleQuestion(){
+  if(q.done)return;
+  if(q.since){q.ms+=Math.max(0,Date.now()-q.since);q.since=null;q.manual=true;}
+  else{q.since=Date.now();q.manual=false;}
+  persist(true);paint();
+ }
+ function resetQuestion(){q={qid:q.qid,ms:0,since:Date.now(),seen:Date.now(),manual:false,done:false};persist(true);paint();}
+ function countAnswer(){if(set.since){set.answered++;persist(true);paint();}}
+ function toggleSet(){
+  if(set.since){set.ms+=Math.max(0,Date.now()-set.since);set.since=null;}
+  else set.since=Date.now();
+  persist(true);paint();
+ }
+ function resetSet(){set={mode:set.mode,ms:0,since:null,seen:Date.now(),answered:0};persist(true);paint();}
+ function fillPace(){
+  $('paceSelect').innerHTML=presets().map(p=>`<option value="${p.id}">${esc(p.label)}</option>`).join('')+'<option value="custom">Custom\u2026</option>';
+  const match=presets().find(p=>p.minutes===pace.minutes&&p.questions===pace.questions);
+  $('paceSelect').value=match?match.id:'custom';
+  $('paceCustom').hidden=!!match;
+  $('paceMinutes').value=pace.minutes;$('paceQuestions').value=pace.questions;
+ }
+ function init(){
+  hydrate(q);hydrate(set);
+  fillPace();$('setMode').value=set.mode;
+  $('questionTimer').onclick=toggleQuestion;
+  $('timerReset').onclick=resetQuestion;
+  $('setStart').onclick=toggleSet;
+  $('setReset').onclick=resetSet;
+  $('setMode').onchange=()=>{set.mode=$('setMode').value;persist(true);paint();};
+  $('paceSelect').onchange=()=>{
+   const chosen=presets().find(p=>p.id===$('paceSelect').value);
+   if(chosen)pace={minutes:chosen.minutes,questions:chosen.questions};
+   $('paceCustom').hidden=!!chosen;
+   save(PACE_KEY,pace);fillPace();paint();
+  };
+  for(const id of ['paceMinutes','paceQuestions'])$(id).oninput=()=>{
+   pace={minutes:clamp(Math.round(+$('paceMinutes').value||1),1,600),questions:clamp(Math.round(+$('paceQuestions').value||1),1,200)};
+   save(PACE_KEY,pace);paint();
+  };
+  document.addEventListener('visibilitychange',()=>{
+   if(document.hidden){if(q.since){q.ms+=Math.max(0,Date.now()-q.since);q.since=null;q.away=true;}persist(true);paint();}
+   else{if(q.away&&!q.manual&&!q.done)q.since=Date.now();q.away=false;persist(true);paint();}
+  });
+  addEventListener('pagehide',()=>persist(true));
+  loop();paint();
+ }
+ return {init,startQuestion,stopQuestion,countAnswer,clock};
+})();
 function showView(progress){$('practiceView').hidden=progress;$('progressView').hidden=!progress;$('progressTab').classList.toggle('active',progress);$('progressTab').textContent=progress?'← Practice':'Progress';}
 async function init(){
+ Timers.init();
+ document.addEventListener('click',e=>{if(!$('timerMenu').contains(e.target))$('timerMenu').open=false;});
  document.addEventListener('click',e=>{if(!$('bankMenu').contains(e.target))$('bankMenu').open=false;});
  document.addEventListener('click',e=>{if(!$('accountMenu').contains(e.target))$('accountMenu').open=false;});
- document.addEventListener('keydown',e=>{if(e.key==='Escape'){$('bankMenu').open=false;}});
+ document.addEventListener('keydown',e=>{if(e.key==='Escape'){$('bankMenu').open=false;$('timerMenu').open=false;}});
  const banks=await api('banks');
  fillBanks(banks);
  $('sqliteBackup').href='/api/backup?bank='+encodeURIComponent(bank);$('sqliteBackup').hidden=!!window.SATOffline;

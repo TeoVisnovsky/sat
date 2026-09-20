@@ -2,7 +2,9 @@
 (function(root){
  'use strict';
  const fields=['id','domain','skill','difficulty','passage_html','prompt_html','answer_type','correct_answer','accepted_answers','explanation_html','choices'];
- const levels=['easy','medium','hard'];
+ const levels=['easy','medium','hard'],ELAPSED_LIMIT=7200000;
+ const elapsed=v=>{if(v===null||v===undefined)return null;if(!Number.isInteger(v)||v<0||v>ELAPSED_LIMIT)throw Error('Invalid question time');return v;};
+ const average=xs=>{const t=xs.filter(x=>x!==null&&x!==undefined);return t.length?Math.round(t.reduce((a,b)=>a+b,0)/t.length):null;};
  const uid=()=>crypto.randomUUID(),now=()=>new Date().toISOString();
  const canonical=x=>JSON.stringify(x&&typeof x==='object'?Array.isArray(x)?x.map(v=>JSON.parse(canonical(v))):Object.fromEntries(Object.keys(x).sort().map(k=>[k,JSON.parse(canonical(x[k]))])):x);
  function numeric(value){
@@ -38,7 +40,7 @@
     if(key==='tags'){text(r.name,60);check(r.name.trim(),'Empty tag');continue;}
     identity(r.id);const unique=['ratings','reviews'].includes(key)?r.question_id:r.id;check(!seen.has(unique),'Duplicate record ID');seen.add(unique);
     const date=key==='attempts'?'answered_at':'updated_at';check(typeof r[date]==='string'&&Number.isFinite(Date.parse(r[date])),'Invalid timestamp');r[date]=new Date(r[date]).toISOString();
-    if(key==='attempts'){check(typeof r.selected_answer==='string'&&r.selected_answer.length<=30&&[0,1,false,true].includes(r.guessed)&&[0,1,false,true].includes(r.is_correct)&&+r.is_correct===+answerCorrect(qs.get(r.question_id),r.selected_answer),'Invalid attempt');r.guessed=+r.guessed;r.is_correct=+r.is_correct;}
+    if(key==='attempts'){check(typeof r.selected_answer==='string'&&r.selected_answer.length<=30&&[0,1,false,true].includes(r.guessed)&&[0,1,false,true].includes(r.is_correct)&&+r.is_correct===+answerCorrect(qs.get(r.question_id),r.selected_answer),'Invalid attempt');r.guessed=+r.guessed;r.is_correct=+r.is_correct;r.elapsed_ms=elapsed(r.elapsed_ms??null);}
     if(key==='notes'){text(r.content,20000);check(Array.isArray(r.parents));}
     if(key==='ratings')check(levels.includes(r.rating));
     if(key==='reviews'){check([0,1,false,true].includes(r.needs_review));r.needs_review=+r.needs_review;}
@@ -55,7 +57,13 @@
   if(conflicts.length)throw Error('Question content differs for '+conflicts.slice(0,12).join(', ')+'. Nothing was merged. Import as a separate database to review both versions.');
   const report={questions_added:0,attempts_added:0,note_conflicts:0};
   for(const q of incoming.questions){if(!questions.has(q.id)){local.questions.push(q);questions.set(q.id,q);report.questions_added++;}else{const old=questions.get(q.id);old.sources=[...new Map([...(old.sources||[]),...(q.sources||[])].map(s=>[canonical(s),s])).values()];}}
-  for(const key of ['attempts','notes']){const records=new Map(local[key].map(r=>[r.id,r]));for(const r of incoming[key]){if(records.has(r.id)&&canonical(r)!==canonical(records.get(r.id)))throw Error('Conflicting history ID. Nothing was merged; add this as a separate database.');if(!records.has(r.id)){local[key].push(r);records.set(r.id,r);if(key==='attempts')report.attempts_added++;}}}
+  // A question time is additive metadata: one side may simply not know it, so it is
+  // filled in rather than treated as history that disagrees.
+  const bare=(key,r)=>key==='attempts'?{...r,elapsed_ms:null}:r;
+  for(const key of ['attempts','notes']){const records=new Map(local[key].map(r=>[r.id,r]));for(const r of incoming[key]){const old=records.get(r.id);
+   if(old){if(key==='attempts'&&old.elapsed_ms==null&&r.elapsed_ms!=null)old.elapsed_ms=r.elapsed_ms;
+    if(canonical(bare(key,r))!==canonical(bare(key,old)))throw Error('Conflicting history ID. Nothing was merged; add this as a separate database.');continue;}
+   local[key].push(r);records.set(r.id,r);if(key==='attempts')report.attempts_added++;}}
   for(const key of ['ratings','reviews']){const records=new Map(local[key].map(r=>[r.question_id,r]));for(const r of incoming[key]){const old=records.get(r.question_id);if(old&&r.id===old.id&&canonical(r)!==canonical(old))throw Error('Conflicting state ID. Nothing was merged; add this as a separate database.');if(!old||r.updated_at>old.updated_at||(r.updated_at===old.updated_at&&r.id>old.id))records.set(r.question_id,r);}local[key]=[...records.values()];}
   local.tags=[...new Map([...incoming.tags,...local.tags].map(t=>[t.question_id+'\0'+t.name.toLowerCase(),t])).values()];
   report.note_conflicts=[...new Set(local.notes.map(n=>n.question_id))].filter(id=>new Set(leaves(local.notes.filter(n=>n.question_id===id)).map(n=>n.content)).size>1).length;
@@ -81,7 +89,7 @@
     if(p.get('tag')){const t=meta.tags.find(t=>String(t.id)===p.get('tag'));if(!t||!data.tags.some(x=>x.question_id===q.id&&x.name.toLowerCase()===t.name.toLowerCase()))return false;}
     const search=(p.get('search')||'').trim().toLowerCase();return !search||q.id.toLowerCase().includes(search)||q.passage_html.toLowerCase().includes(search);
    });
-   if(url.pathname==='/stats'){const rows=data.questions.map(q=>row(data,q,meta)),first=data.questions.map(q=>attempts(data,q.id)[0]).filter(Boolean);return {total:rows.length,done:first.length,first_correct:first.reduce((n,a)=>n+(+a.is_correct),0),review:rows.filter(q=>q.needs_review).length,skills:meta.skills.map(s=>{const qs=rows.filter(q=>q.skill_id===s.id),as=qs.map(q=>attempts(data,q.id)[0]).filter(Boolean);return {...s,total:qs.length,done:as.length,correct:as.reduce((n,a)=>n+(+a.is_correct),0)};})};}
+   if(url.pathname==='/stats'){const rows=data.questions.map(q=>row(data,q,meta)),first=data.questions.map(q=>attempts(data,q.id)[0]).filter(Boolean);const allTimes=data.attempts.map(a=>a.elapsed_ms).filter(x=>x!==null&&x!==undefined);return {total:rows.length,done:first.length,first_correct:first.reduce((n,a)=>n+(+a.is_correct),0),review:rows.filter(q=>q.needs_review).length,timed:allTimes.length,average_ms:average(allTimes),skills:meta.skills.map(s=>{const qs=rows.filter(q=>q.skill_id===s.id),as=qs.map(q=>attempts(data,q.id)[0]).filter(Boolean);return {...s,total:qs.length,done:as.length,correct:as.reduce((n,a)=>n+(+a.is_correct),0),average_ms:average(as.map(a=>a.elapsed_ms))};})};}
    if(url.pathname.startsWith('/question/')){const q=data.questions.find(q=>q.id===url.pathname.split('/').at(-1));if(!q)throw Error('Question not found');const vs=data.notes.filter(n=>n.question_id===q.id);return {...row(data,q,meta),choices:q.choices,assets:[],note:noteText(vs),note_parents:leaves(vs).map(n=>n.id),tags:data.tags.filter(t=>t.question_id===q.id).map(t=>t.name),history:attempts(data,q.id).reverse(),sources:q.sources||[]};}
    throw Error('Unknown request');
   }
@@ -89,7 +97,7 @@
   const setState=(key,value)=>{data[key]=data[key].filter(r=>r.question_id!==q.id);data[key].push({id:uid(),question_id:q.id,updated_at:now(),...value});};
   if(path==='attempt'){
    if(typeof body.answer!=='string'||body.answer.length>30||typeof body.guessed!=='boolean'||((q.answer_type||'choice')==='choice'&&!['A','B','C','D'].includes(body.answer))||((q.answer_type||'choice')==='numeric'&&!numeric(body.answer)))throw Error((q.answer_type||'choice')==='choice'?'Choose A, B, C, or D':'Enter a number, decimal, or fraction');
-   body.answer=body.answer.trim().replace(/−/g,'-');const correct=answerCorrect(q,body.answer),review=+(!correct||body.guessed),id=uid();data.attempts.push({id,question_id:q.id,selected_answer:body.answer,is_correct:+correct,guessed:+body.guessed,answered_at:now()});setState('reviews',{needs_review:review});return {attempt_id:id,is_correct:correct,correct_answer:q.correct_answer,explanation_html:q.explanation_html,needs_review:review};
+   body.answer=body.answer.trim().replace(/−/g,'-');const spent=elapsed(body.elapsed_ms??null),correct=answerCorrect(q,body.answer),review=+(!correct||body.guessed),id=uid();data.attempts.push({id,question_id:q.id,selected_answer:body.answer,is_correct:+correct,guessed:+body.guessed,elapsed_ms:spent,answered_at:now()});setState('reviews',{needs_review:review});return {attempt_id:id,is_correct:correct,correct_answer:q.correct_answer,explanation_html:q.explanation_html,needs_review:review};
   }
   if(path==='note'){if(typeof body.content!=='string'||body.content.length>20000)throw Error('Note is too long');const vs=data.notes.filter(n=>n.question_id===q.id),parents=body.parents===undefined?leaves(vs).map(v=>v.id):body.parents;if(!Array.isArray(parents)||parents.some(id=>!vs.some(n=>n.id===id)))throw Error('Note history changed. Reopen the question before editing.');if(noteText(vs)===body.content)return {saved:true,note_parents:leaves(vs).map(n=>n.id)};const id=uid();data.notes.push({id,question_id:q.id,content:body.content,updated_at:now(),parents});return {saved:true,note_parents:[id]};}
   else if(path==='difficulty'){if(!levels.includes(body.rating))throw Error('Invalid difficulty');setState('ratings',{rating:body.rating});}

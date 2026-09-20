@@ -26,7 +26,18 @@ def migrate(db):
     if 'accepted_answers' not in columns:
         db.execute("ALTER TABLE questions ADD COLUMN accepted_answers TEXT NOT NULL DEFAULT '[]'")
         db.execute("UPDATE questions SET accepted_answers=json_array(correct_answer)")
+    if 'elapsed_ms' not in {r[1] for r in db.execute('PRAGMA table_info(attempts)')}:
+        db.execute('ALTER TABLE attempts ADD COLUMN elapsed_ms INTEGER')
     db.execute('INSERT OR IGNORE INTO transfer_meta VALUES (?,?)',('bank_id',uid()))
+
+ELAPSED_LIMIT=7200000
+def elapsed(value):
+    """Question timings are optional, but a present value must be a plain, sane millisecond count.
+    Booleans are rejected explicitly: isinstance(True,int) is True in Python but not in JavaScript,
+    and the two runtimes have to agree on what they accept."""
+    if value is None:return None
+    if isinstance(value,bool) or not isinstance(value,int) or not 0<=value<=ELAPSED_LIMIT:raise ValueError('Invalid question time')
+    return value
 
 def numeric(value):
     if not isinstance(value,str):return None
@@ -54,7 +65,7 @@ def capture(db):
     migrate(db)
     for r in db.execute('SELECT a.* FROM attempts a LEFT JOIN attempt_ids i ON i.attempt_id=a.id WHERE i.sync_id IS NULL').fetchall():
         # Old, independently copied SQLite backups identify their common legacy rows identically.
-        identity=canonical(dict(r))
+        identity=canonical({k:r[k] for k in ('id','question_id','selected_answer','is_correct','guessed','answered_at')})
         legacy_id='legacy-'+str(r['id']).zfill(20)+'-'+uuid.uuid5(uuid.NAMESPACE_URL,'sat-legacy-attempt:'+identity).hex
         db.execute('INSERT INTO attempt_ids VALUES (?,?)',(r['id'],legacy_id))
     for r in db.execute('SELECT * FROM notes').fetchall():
@@ -79,7 +90,7 @@ def export_bank(db,name='SAT English'):
         q['sources']=[dict(s) for s in db.execute('SELECT filename,file_sha256,page_start,page_end FROM sources JOIN question_sources ON source_id=sources.id WHERE question_id=?',(q['id'],))]
         result['questions'].append(q)
     for r in db.execute('SELECT a.*,i.sync_id FROM attempts a JOIN attempt_ids i ON i.attempt_id=a.id'):
-        result['attempts'].append(dict(id=r['sync_id'],question_id=r['question_id'],selected_answer=r['selected_answer'],is_correct=r['is_correct'],guessed=r['guessed'],answered_at=stamp(r['answered_at'])))
+        result['attempts'].append(dict(id=r['sync_id'],question_id=r['question_id'],selected_answer=r['selected_answer'],is_correct=r['is_correct'],guessed=r['guessed'],elapsed_ms=elapsed(r['elapsed_ms']),answered_at=stamp(r['answered_at'])))
     for r in db.execute('SELECT * FROM note_versions'):result['notes'].append(dict(r,parents=json.loads(r['parents'])))
     for r in db.execute('SELECT * FROM state_versions'):
         result[r['kind']].append(dict(id=r['id'],question_id=r['question_id'],updated_at=r['updated_at'],**{('rating' if r['kind']=='ratings' else 'needs_review'):json.loads(r['value'])}))
@@ -131,7 +142,7 @@ def validate(data):
             date='answered_at' if key=='attempts' else 'updated_at';r[date]=stamp(r[date])
             if key=='attempts':
                 if not isinstance(r['selected_answer'],str) or len(r['selected_answer'])>30 or r['guessed'] not in (0,1) or r['is_correct']!=int(answer_correct(qs[r['question_id']],r['selected_answer'])):raise ValueError('Invalid attempt')
-                r['guessed']=int(r['guessed']);r['is_correct']=int(r['is_correct'])
+                r['guessed']=int(r['guessed']);r['is_correct']=int(r['is_correct']);r['elapsed_ms']=elapsed(r.get('elapsed_ms'))
             elif key=='notes':
                 text(r['content'],20000)
                 if not isinstance(r['parents'],list):raise ValueError('Invalid note revisions')
@@ -162,11 +173,18 @@ def merge(local,incoming):
         if q['id'] not in questions:local['questions'].append(q);questions[q['id']]=q;report['questions_added']+=1
         else:
             sources={canonical(s):s for s in questions[q['id']].get('sources',[])+q.get('sources',[])};questions[q['id']]['sources']=list(sources.values())
+    # A question time is additive metadata: one side may simply not know it, so it is
+    # filled in rather than treated as history that disagrees.
+    bare=lambda key,r:{**r,'elapsed_ms':None} if key=='attempts' else r
     for key in ['attempts','notes']:
         records={r['id']:r for r in local[key]}
         for r in incoming[key]:
-            if r['id'] in records and canonical(r)!=canonical(records[r['id']]):raise ValueError('Conflicting history ID. Nothing was merged; add this as a separate database.')
-            if r['id'] not in records:local[key].append(r);records[r['id']]=r;report['attempts_added']+=int(key=='attempts')
+            old=records.get(r['id'])
+            if old is not None:
+                if key=='attempts' and old.get('elapsed_ms') is None and r.get('elapsed_ms') is not None:old['elapsed_ms']=r['elapsed_ms']
+                if canonical(bare(key,r))!=canonical(bare(key,old)):raise ValueError('Conflicting history ID. Nothing was merged; add this as a separate database.')
+                continue
+            local[key].append(r);records[r['id']]=r;report['attempts_added']+=int(key=='attempts')
     for key in ['ratings','reviews']:
         records={r['question_id']:r for r in local[key]}
         for r in incoming[key]:
@@ -193,7 +211,7 @@ def store(db,data):
     ids={r[0] for r in db.execute('SELECT sync_id FROM attempt_ids')}
     for a in sorted(data['attempts'],key=lambda a:(a['answered_at'],a['id'])):
         if a['id'] not in ids:
-            cur=db.execute('INSERT INTO attempts(question_id,selected_answer,is_correct,guessed,answered_at) VALUES (?,?,?,?,?)',tuple(a[k] for k in ('question_id','selected_answer','is_correct','guessed','answered_at')))
+            cur=db.execute('INSERT INTO attempts(question_id,selected_answer,is_correct,guessed,elapsed_ms,answered_at) VALUES (?,?,?,?,?,?)',tuple(a.get(k) for k in ('question_id','selected_answer','is_correct','guessed','elapsed_ms','answered_at')))
             db.execute('INSERT INTO attempt_ids VALUES (?,?)',(cur.lastrowid,a['id']));ids.add(a['id'])
     for n in data['notes']:db.execute('INSERT OR IGNORE INTO note_versions VALUES (?,?,?,?,?)',(n['id'],n['question_id'],n['content'],n['updated_at'],json.dumps(n['parents'])))
     for qid in {n['question_id'] for n in data['notes']}:

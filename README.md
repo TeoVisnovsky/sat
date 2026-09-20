@@ -80,11 +80,13 @@ Keep the terminal open while practicing. Press **Ctrl+C** to stop the server. No
 - Multiple-choice questions: select A, B, C, or D. You can change your selection freely; the A-D keys also work.
 - Math student-produced responses: type a number, decimal, or fraction and press Enter or **Check**. Equivalent forms are accepted, so `18/11`, `36/22` and `1.636` all count for the same answer. Only digits, a sign, one decimal point, or one fraction bar are accepted.
 - Optionally tick **I am unsure / guessing**, then click **Check**. Only Check records an attempt and reveals the answer.
+- The header stopwatch times each question. The bar fills toward your pace target and the figure beside it counts down to that target, then turns red and counts up once you pass it. Press the stopwatch to pause it if you have to step away; it also pauses by itself when you switch tabs, and a reload keeps it running. Each answer saves its own time, so a second attempt at the same question is timed separately.
+- **Timers** holds the pace target and a set timer that runs across questions. The target defaults to a full section — English 64 min for 54 questions (1:11 each), Math 70 min for 44 questions (1:35 each) — with a single-module preset and a custom option. The set timer counts up, or counts down against that target for an exam-style run, and reports elapsed time, questions answered and average pace.
 - Rate **How did this feel?** as Easy, Medium, or Hard. **My difficulty** filters use your latest rating, independently of the official difficulty.
 - Notes stay hidden when you open a question. Check an answer to reveal them, or choose **Show notes without answering** to review without recording an attempt. Notes autosave; **Save now** saves immediately.
 - Enter personal tags separated by commas, then click **Save tags**.
 - Wrong and guessed answers enter review. A confident correct retry removes a question from review; you can also mark questions manually.
-- **Progress** shows unique questions completed and first-attempt accuracy. Retrying never inflates completion or erases earlier attempts.
+- **Progress** shows unique questions completed, first-attempt accuracy, and your average time per question overall and per skill. Retrying never inflates completion or erases earlier attempts.
 
 The web app saves on each device and syncs to the signed-in account. Each friend has independent progress. The optional Python service saves only to its local SQLite database; it does not participate in cloud sync.
 

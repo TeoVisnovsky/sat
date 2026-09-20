@@ -14,6 +14,34 @@ class TransferTests(unittest.TestCase):
         if not shutil.which('node'):self.skipTest('Node is required for cross-runtime checks')
         result=subprocess.run(['node','test_bank_core.js',mode],input=json.dumps(data),text=True,encoding='utf-8',capture_output=True,check=True,cwd=server.ROOT)
         return json.loads(result.stdout)
+    def test_question_timing_survives_upgrade_and_transfer(self):
+        with server.connect() as db:
+            self.assertIn('elapsed_ms',{r[1] for r in db.execute('PRAGMA table_info(attempts)')})
+            db.execute('INSERT INTO attempts(question_id,selected_answer,is_correct,guessed,elapsed_ms,answered_at) VALUES (?,?,?,?,?,?)',(self.qid,'A',0,0,41000,transfer.now()))
+            db.execute('INSERT INTO attempts(question_id,selected_answer,is_correct,guessed,answered_at) VALUES (?,?,?,?,?)',(self.qid,'A',0,0,transfer.now()))
+            exported=transfer.export_bank(db)
+        times=sorted(a['elapsed_ms'] for a in exported['attempts'] if a['elapsed_ms'] is not None)
+        self.assertEqual(times,[41000])
+        self.assertEqual(sum(a['elapsed_ms'] is None for a in exported['attempts']),1,'Untimed attempts export as null')
+        self.assertEqual(transfer.validate(copy.deepcopy(exported)),exported)
+        # A file written before timing existed omits the field entirely; it must merge without a conflict.
+        legacy=copy.deepcopy(exported)
+        for a in legacy['attempts']:a.pop('elapsed_ms')
+        legacy=transfer.validate(legacy)
+        merged,report=transfer.merge(copy.deepcopy(exported),copy.deepcopy(legacy))
+        self.assertEqual(report['attempts_added'],0,'The same attempts must not be duplicated by the upgrade')
+        self.assertEqual(sorted(a['elapsed_ms'] for a in merged['attempts'] if a['elapsed_ms'] is not None),[41000],'Merging an untimed copy must not erase a known time')
+        filled,_=transfer.merge(copy.deepcopy(legacy),copy.deepcopy(exported))
+        self.assertEqual(sorted(a['elapsed_ms'] for a in filled['attempts'] if a['elapsed_ms'] is not None),[41000],'A known time fills in a missing one')
+        self.assertEqual(self.node('merge',[copy.deepcopy(exported),copy.deepcopy(legacy)])['attempts'],merged['attempts'])
+        # Storing the merge back preserves the recorded time.
+        fresh=self.root/'timed.db';server.initialize_database(fresh)
+        with server.connect(fresh) as db:
+            transfer.store(db,merged)
+            self.assertEqual(sorted(r[0] for r in db.execute('SELECT elapsed_ms FROM attempts') if r[0] is not None),[41000])
+        for bad in (-1,7200001,'40',1.5):
+            with self.assertRaises(ValueError):transfer.elapsed(bad)
+
     def test_phone_pc_roundtrip_and_note_resolution(self):
         with server.connect() as db:
             db.execute('INSERT INTO notes(question_id,content) VALUES (?,?)',(self.qid,'PC note'));pc=transfer.export_bank(db)

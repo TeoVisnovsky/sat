@@ -26,5 +26,18 @@ if(process.argv[2]){
  assert(core.request(math,'attempt',{question_id:numeric.id,answer:equivalent,guessed:false}).is_correct);
  assert(!core.request(math,'attempt',{question_id:numeric.id,answer:'999999',guessed:false}).is_correct);
  assert.throws(()=>core.request(math,'attempt',{question_id:numeric.id,answer:'2+2',guessed:false}),/number/);
- assert.equal(base.attempts.length,0);console.log('Offline core: idempotency, note resolution, filters, conflicts and validation passed.');
+ // Question timing: optional, round-trips, and never provokes a false merge conflict.
+ const timed=structuredClone(base),tq=timed.questions[0];
+ const withTime=core.request(timed,'attempt',{question_id:tq.id,answer:tq.correct_answer,guessed:false,elapsed_ms:41000});
+ assert(withTime.is_correct);assert.equal(timed.attempts.at(-1).elapsed_ms,41000);
+ core.request(timed,'attempt',{question_id:tq.id,answer:tq.correct_answer,guessed:false});
+ assert.equal(timed.attempts.at(-1).elapsed_ms,null,'An untimed attempt stores null, not undefined');
+ for(const bad of [-1,7200001,1.5,'40',true])assert.throws(()=>core.request(structuredClone(timed),'attempt',{question_id:tq.id,answer:tq.correct_answer,guessed:false,elapsed_ms:bad}),/time/,'rejects '+bad);
+ // A bank exported before timing existed has no elapsed_ms at all; it must still merge cleanly.
+ const legacy=structuredClone(timed);for(const a of legacy.attempts)delete a.elapsed_ms;
+ const validated=core.validate(legacy);assert.equal(validated.attempts[0].elapsed_ms,null);
+ assert.equal(core.merge(structuredClone(validated),structuredClone(validated)).data.attempts.length,validated.attempts.length);
+ assert.equal(core.request(timed,'stats').average_ms,41000);
+ assert.equal(core.request(timed,'stats').timed,1);
+ assert.equal(base.attempts.length,0);console.log('Offline core: idempotency, note resolution, filters, conflicts, timing and validation passed.');
 }

@@ -87,6 +87,19 @@ class TrainerTests(unittest.TestCase):
         code,raw=self.request('/api/attempt',{'question_id':qid,'answer':answer,'guessed':False},{'X-SAT-Bank':'math'});self.assertEqual(code,200,raw);self.assertTrue(json.loads(raw)['is_correct'])
         code,raw=self.request('/api/attempt',{'question_id':qid,'answer':'2+2','guessed':False},{'X-SAT-Bank':'math'});self.assertEqual(code,400,raw)
 
+    def test_attempt_records_question_time(self):
+        """Runs against the Math bank so the shared English bank stays untouched."""
+        math={'X-SAT-Bank':'math'}
+        qid=[q for q in self.get('questions?bank=math') if q['answer_type']=='choice'][0]['id']
+        code,raw=self.request('/api/attempt',{'question_id':qid,'answer':'A','guessed':False,'elapsed_ms':41000},math);self.assertEqual(code,200,raw)
+        self.assertEqual(self.get('question/'+qid+'?bank=math')['history'][0]['elapsed_ms'],41000)
+        code,raw=self.request('/api/attempt',{'question_id':qid,'answer':'A','guessed':False},math);self.assertEqual(code,200,raw)
+        self.assertIsNone(self.get('question/'+qid+'?bank=math')['history'][0]['elapsed_ms'],'An untimed answer is still accepted')
+        for bad in (-1,7200001,'40',1.5,True):
+            code,raw=self.request('/api/attempt',{'question_id':qid,'answer':'A','guessed':False,'elapsed_ms':bad},math);self.assertEqual(code,400,'accepted %r: %s'%(bad,raw))
+        stats=self.get('stats?bank=math');self.assertEqual(stats['timed'],1);self.assertEqual(stats['average_ms'],41000)
+        self.assertEqual(self.get('stats')['timed'],0,'The English bank must be unaffected')
+
     def test_first_run_preserves_existing_database(self):
         path=Path(self.tmp.name)/'first-run.db'
         server.initialize_database(path)
