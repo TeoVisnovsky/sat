@@ -1,9 +1,10 @@
 """Versioned, device-independent bank snapshots. No network or third-party packages."""
 import json, uuid, re
+from fractions import Fraction
 from datetime import datetime, timezone
 from recover_prompts import clean
 
-FIELDS=('id','domain','skill','difficulty','passage_html','prompt_html','correct_answer','explanation_html','choices')
+FIELDS=('id','domain','skill','difficulty','passage_html','prompt_html','answer_type','correct_answer','accepted_answers','explanation_html','choices')
 LEVELS=('easy','medium','hard')
 def now():return datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00','Z')
 def uid():return str(uuid.uuid4())
@@ -20,7 +21,24 @@ def migrate(db):
     db.execute('CREATE TABLE IF NOT EXISTS attempt_ids(attempt_id INTEGER PRIMARY KEY REFERENCES attempts(id),sync_id TEXT NOT NULL UNIQUE)')
     db.execute('CREATE TABLE IF NOT EXISTS note_versions(id TEXT PRIMARY KEY,question_id TEXT NOT NULL REFERENCES questions(id),content TEXT NOT NULL,updated_at TEXT NOT NULL,parents TEXT NOT NULL)')
     db.execute('CREATE TABLE IF NOT EXISTS state_versions(kind TEXT NOT NULL,question_id TEXT NOT NULL REFERENCES questions(id),id TEXT NOT NULL,updated_at TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(kind,question_id))')
+    columns={r[1] for r in db.execute('PRAGMA table_info(questions)')}
+    if 'answer_type' not in columns:db.execute("ALTER TABLE questions ADD COLUMN answer_type TEXT NOT NULL DEFAULT 'choice'")
+    if 'accepted_answers' not in columns:
+        db.execute("ALTER TABLE questions ADD COLUMN accepted_answers TEXT NOT NULL DEFAULT '[]'")
+        db.execute("UPDATE questions SET accepted_answers=json_array(correct_answer)")
     db.execute('INSERT OR IGNORE INTO transfer_meta VALUES (?,?)',('bank_id',uid()))
+
+def numeric(value):
+    if not isinstance(value,str):return None
+    value=value.strip().replace('\N{MINUS SIGN}','-')
+    if len(value)>30 or not re.fullmatch(r'[+-]?(?:\d+(?:\.\d*)?|\.\d+|\d+/[+-]?\d+)',value):return None
+    try:return Fraction(value)
+    except (ValueError,ZeroDivisionError):return None
+
+def answer_correct(question,answer):
+    if question.get('answer_type','choice')=='choice':return answer==question['correct_answer']
+    value=numeric(answer)
+    return value is not None and any(numeric(x)==value for x in question.get('accepted_answers',[]))
 
 def note_leaves(versions):
     parents={p for v in versions for p in v['parents']}
@@ -55,7 +73,8 @@ def export_bank(db,name='SAT English'):
     capture(db)
     result={'format':'sat-bank','version':1,'bank':{'id':db.execute("SELECT value FROM transfer_meta WHERE key='bank_id'").fetchone()[0],'name':name},'questions':[],'attempts':[],'notes':[],'ratings':[],'reviews':[],'tags':[]}
     for r in db.execute('SELECT q.*,s.name skill,d.name domain FROM questions q JOIN skills s ON s.id=q.skill_id JOIN domains d ON d.id=s.domain_id ORDER BY q.rowid'):
-        q={k:r[k] for k in FIELDS if k!='choices'}
+        q={k:r[k] for k in FIELDS if k not in ('choices','accepted_answers')}
+        q['accepted_answers']=json.loads(r['accepted_answers'])
         q['choices']=[dict(c) for c in db.execute('SELECT letter,content_html FROM choices WHERE question_id=? ORDER BY letter',(q['id'],))]
         q['sources']=[dict(s) for s in db.execute('SELECT filename,file_sha256,page_start,page_end FROM sources JOIN question_sources ON source_id=sources.id WHERE question_id=?',(q['id'],))]
         result['questions'].append(q)
@@ -84,10 +103,15 @@ def validate(data):
         if q['id'] in qs:raise ValueError('Duplicate question ID')
         qs[q['id']]=q
         for key in ['domain','skill']:text(q[key],200)
-        if q['difficulty'] not in LEVELS or q['correct_answer'] not in list('ABCD'):raise ValueError('Invalid question answer or difficulty')
+        q.setdefault('answer_type','choice');q.setdefault('accepted_answers',[q.get('correct_answer')])
+        if q['difficulty'] not in LEVELS or q['answer_type'] not in ('choice','numeric'):raise ValueError('Invalid question answer or difficulty')
+        if q['answer_type']=='numeric':
+            if not isinstance(q['accepted_answers'],list) or not q['accepted_answers'] or any(not isinstance(x,str) or not x.strip() or numeric(x) is None for x in q['accepted_answers']):raise ValueError('Invalid question answer')
+        elif q['correct_answer'] not in list('ABCD'):raise ValueError('Invalid question answer')
         for key in ['passage_html','prompt_html','explanation_html']:q[key]=clean(text(q[key]))
         if not q['prompt_html'].strip():raise ValueError('Question prompt is empty')
-        if not isinstance(q['choices'],list) or sorted(c['letter'] for c in q['choices'])!=list('ABCD'):raise ValueError('Four choices A–D are required')
+        expected=list('ABCD') if q['answer_type']=='choice' else []
+        if not isinstance(q['choices'],list) or sorted(c['letter'] for c in q['choices'])!=expected:raise ValueError('Answer choices do not match the question type')
         q['choices']=sorted([{'letter':c['letter'],'content_html':clean(text(c['content_html']))} for c in q['choices']],key=lambda c:c['letter'])
         for s in q.get('sources',[]):
             text(s['filename'],250);text(s['file_sha256'],100)
@@ -106,7 +130,7 @@ def validate(data):
             seen.add(unique)
             date='answered_at' if key=='attempts' else 'updated_at';r[date]=stamp(r[date])
             if key=='attempts':
-                if r['selected_answer'] not in list('ABCD') or r['guessed'] not in (0,1) or r['is_correct']!=int(r['selected_answer']==qs[r['question_id']]['correct_answer']):raise ValueError('Invalid attempt')
+                if not isinstance(r['selected_answer'],str) or len(r['selected_answer'])>30 or r['guessed'] not in (0,1) or r['is_correct']!=int(answer_correct(qs[r['question_id']],r['selected_answer'])):raise ValueError('Invalid attempt')
                 r['guessed']=int(r['guessed']);r['is_correct']=int(r['is_correct'])
             elif key=='notes':
                 text(r['content'],20000)
@@ -161,7 +185,7 @@ def store(db,data):
     for q in data['questions']:
         db.execute('INSERT OR IGNORE INTO domains(name) VALUES (?)',(q['domain'],));did=db.execute('SELECT id FROM domains WHERE name=?',(q['domain'],)).fetchone()[0]
         db.execute('INSERT OR IGNORE INTO skills(domain_id,name) VALUES (?,?)',(did,q['skill']));sid=db.execute('SELECT id FROM skills WHERE domain_id=? AND name=?',(did,q['skill'])).fetchone()[0]
-        db.execute('INSERT OR IGNORE INTO questions(id,skill_id,difficulty,passage_html,prompt_html,correct_answer,explanation_html) VALUES (?,?,?,?,?,?,?)',(q['id'],sid,q['difficulty'],q['passage_html'],q['prompt_html'],q['correct_answer'],q['explanation_html']))
+        db.execute('INSERT OR IGNORE INTO questions(id,skill_id,difficulty,passage_html,prompt_html,answer_type,correct_answer,accepted_answers,explanation_html) VALUES (?,?,?,?,?,?,?,?,?)',(q['id'],sid,q['difficulty'],q['passage_html'],q['prompt_html'],q['answer_type'],q['correct_answer'],canonical(q['accepted_answers']),q['explanation_html']))
         for c in q['choices']:db.execute('INSERT OR IGNORE INTO choices VALUES (?,?,?)',(q['id'],c['letter'],c['content_html']))
         for s in q.get('sources',[]):
             db.execute('INSERT OR IGNORE INTO sources(filename,file_sha256) VALUES (?,?)',(s['filename'],s['file_sha256']));sid=db.execute('SELECT id FROM sources WHERE file_sha256=?',(s['file_sha256'],)).fetchone()[0]

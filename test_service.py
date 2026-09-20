@@ -8,16 +8,17 @@ class TrainerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp=tempfile.TemporaryDirectory();cls.path=Path(cls.tmp.name)/'test.db'
-        server.BANKS=Path(cls.tmp.name)/'banks'
+        server.BANKS=Path(cls.tmp.name)/'banks';cls.old_math=server.MATH_DB;server.MATH_DB=Path(cls.tmp.name)/'math.db'
         src=sqlite3.connect(server.ROOT/'sat-clean.db');dst=sqlite3.connect(cls.path);src.backup(dst);src.close()
         dst.executescript((server.ROOT/'schema.sql').read_text())
         for table in ['attempts','notes','review_state','question_tags','tags','personal_difficulty']:dst.execute('DELETE FROM '+table)
-        dst.commit();dst.close();server.DB=cls.path
+        dst.commit();dst.close()
+        src=sqlite3.connect(server.ROOT/'sat-math-clean.db');dst=sqlite3.connect(server.MATH_DB);src.backup(dst);src.close();dst.close();server.DB=cls.path
         cls.http=server.ThreadingHTTPServer(('127.0.0.1',0),server.Handler)
         cls.thread=threading.Thread(target=cls.http.serve_forever,daemon=True);cls.thread.start()
         cls.base='http://127.0.0.1:'+str(cls.http.server_port)
     @classmethod
-    def tearDownClass(cls):cls.http.shutdown();cls.http.server_close();cls.tmp.cleanup()
+    def tearDownClass(cls):cls.http.shutdown();cls.http.server_close();server.MATH_DB=cls.old_math;cls.tmp.cleanup()
     def request(self,path,data=None,headers=None):
         h={'Content-Type':'application/json'};h.update(headers or {})
         req=urllib.request.Request(self.base+path,data=None if data is None else json.dumps(data).encode(),headers=h)
@@ -77,6 +78,15 @@ class TrainerTests(unittest.TestCase):
             for path, in db.execute('SELECT file_path FROM assets'):self.assertTrue(path.startswith('assets/'))
             self.assertEqual(db.execute('PRAGMA foreign_key_check').fetchall(),[])
 
+    def test_math_numeric_answers(self):
+        questions=self.get('questions?bank=math');self.assertEqual(len(questions),536)
+        with closing(sqlite3.connect(server.MATH_DB)) as db:
+            qid,accepted=db.execute("SELECT id,accepted_answers FROM questions WHERE answer_type='numeric' AND json_array_length(accepted_answers)>1 LIMIT 1").fetchone()
+        detail=self.get('question/'+qid+'?bank=math');self.assertEqual(detail['answer_type'],'numeric');self.assertEqual(detail['choices'],[]);self.assertNotIn('correct_answer',detail)
+        answer=json.loads(accepted)[-1]
+        code,raw=self.request('/api/attempt',{'question_id':qid,'answer':answer,'guessed':False},{'X-SAT-Bank':'math'});self.assertEqual(code,200,raw);self.assertTrue(json.loads(raw)['is_correct'])
+        code,raw=self.request('/api/attempt',{'question_id':qid,'answer':'2+2','guessed':False},{'X-SAT-Bank':'math'});self.assertEqual(code,400,raw)
+
     def test_first_run_preserves_existing_database(self):
         path=Path(self.tmp.name)/'first-run.db'
         server.initialize_database(path)
@@ -100,6 +110,6 @@ class TrainerTests(unittest.TestCase):
         req=urllib.request.Request(self.base+'/api/banks/import',data=b'not a database',headers={'Content-Type':'application/octet-stream'})
         with self.assertRaises(urllib.error.HTTPError) as error:urllib.request.urlopen(req)
         self.assertEqual(error.exception.code,400)
-        self.assertEqual(len(self.get('banks')),2)
+        self.assertEqual(len(self.get('banks')),3)
 
 if __name__=='__main__':unittest.main(verbosity=2)

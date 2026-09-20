@@ -5,6 +5,14 @@ let selectedAnswer=null;
 let meta,questions=[],current=null,answered=false,busy=false,loadVersion=0,listVersion=0;
 let noteTimer,searchTimer,toastTimer,noteQueue=Promise.resolve();
 const pendingNotes=new Map();
+// The header follows the open bank so English and Math are never mistaken for each other.
+function showBankName(banks){
+ const name=banks.find(b=>b.id===bank)?.name||'';
+ const subject=name.replace(/^SAT\s*/i,'').split('·')[0].trim()||'Practice';
+ $('brandSubject').textContent=' / '+subject;
+ document.title='SAT · '+subject+' practice';
+}
+const fillBanks=banks=>{$('bankSelect').innerHTML=banks.map(b=>`<option value="${esc(b.id)}">${esc(b.name)}</option>`).join('');$('bankSelect').value=bank;showBankName(banks);};
 const noteParents=new Map();
 async function api(path,data){
  if(window.SATOffline)return SATOffline.request(bank,path,data);
@@ -41,11 +49,12 @@ async function openQuestion(id){
 }
 function renderQuestion(){
  const q=current;const pos=questions.findIndex(x=>x.id===q.id);
+ const answerControl=q.answer_type==='numeric'?`<div class="numeric-answer"><label for="numericAnswer">Your answer</label><input id="numericAnswer" inputmode="decimal" autocomplete="off" placeholder="Enter a number, decimal, or fraction" aria-describedby="numericHelp"><small id="numericHelp">Examples: 12, -3.5, or 2/3</small></div>`:`<div class="choices">${q.choices.map(c=>`<button class="choice" aria-pressed="false" data-letter="${c.letter}"><span class="letter">${c.letter}</span><span>${SATCore.html(c.content_html)}</span></button>`).join('')}</div>`;
  $('workspace').innerHTML=`<div class="question-top"><span>${pos>=0?`${pos+1} of ${questions.length} · `:''}${q.id}</span><div class="question-actions"><button id="copyLink">Copy link</button><button id="reviewToggle">${q.needs_review?'✓ In review':'Mark for review'}</button></div></div>
  <p class="eyebrow">${esc(q.domain)}</p><div class="question-title"><h2>${esc(q.skill)}</h2><span class="badge">${q.difficulty[0].toUpperCase()+q.difficulty.slice(1)}</span><span class="badge" id="stateBadge">${stateLabel(q)}</span></div>
  <div class="passage-text">${SATCore.html(q.passage_html)}</div>
  <details class="transcript" ${q.assets.length?'':'hidden'}><summary>Original PDF passage</summary>${q.assets.map(a=>`<img class="passage-image" src="/${esc(a.file_path)}" alt="${esc(a.alt_text)}">`).join('')}</details>
- <div class="instruction">${SATCore.html(q.prompt_html)||'Choose the best answer.'}</div><div class="choices">${q.choices.map(c=>`<button class="choice" aria-pressed="false" data-letter="${c.letter}"><span class="letter">${c.letter}</span><span>${SATCore.html(c.content_html)}</span></button>`).join('')}</div>
+ <div class="instruction${q.passage_html.trim()?'':' stem'}">${SATCore.html(q.prompt_html)||'Choose the best answer.'}</div>${answerControl}
  <div class="check-row"><label class="confidence"><input type="checkbox" id="guessed"> I am unsure / guessing</label><button id="checkAnswer" class="primary" disabled>Check</button></div><div id="feedback" aria-live="polite"></div>
  <div class="next-row"><span class="secondary-info" id="attemptInfo">${q.attempt_count?`${q.attempt_count} previous attempt${q.attempt_count===1?'':'s'} · answer again to check`:'Not attempted yet'}</span><button id="nextQuestion" class="primary">Next question →</button></div>
  <button id="showNotes" class="text-button">Show notes without answering</button><div id="notesPanel" hidden><div class="notes-heading"><label for="note">Your notes</label><span class="save-status" id="saveStatus">${q.note?'Saved':'Autosaves'}</span></div>
@@ -53,6 +62,7 @@ function renderQuestion(){
  <label for="personalTags">Personal tags</label><div class="tag-editor"><input id="personalTags" placeholder="comma splice, vocabulary…" value="${esc(q.tags.join(', '))}"><button id="saveTags">Save tags</button></div>
  <details class="history"><summary>Attempt history (${q.history.length}) & source</summary><ul>${q.history.map(h=>`<li>${esc(h.answered_at)} UTC · ${h.selected_answer} · ${h.is_correct?'Correct':'Incorrect'}${h.guessed?' · Guessed':''}</li>`).join('')||'<li>No attempts yet.</li>'}</ul>${q.sources.map(s=>`<p>${esc(s.filename)} · page ${s.page_start}${s.page_end!==s.page_start?'–'+s.page_end:''}</p>`).join('')}</details>`;
  $('workspace').querySelectorAll('.choice').forEach(b=>b.onclick=()=>selectAnswer(b.dataset.letter));
+ if(q.answer_type==='numeric'){$('numericAnswer').oninput=()=>{selectedAnswer=$('numericAnswer').value.trim();$('checkAnswer').disabled=!selectedAnswer;};$('numericAnswer').onkeydown=e=>{if(e.key==='Enter'&&!$('checkAnswer').disabled){e.preventDefault();$('checkAnswer').click();}};}
  $('checkAnswer').onclick=safe(()=>answer(selectedAnswer));
  $('showNotes').onclick=()=>{$('notesPanel').hidden=false;$('showNotes').hidden=true;};
  $('note').oninput=()=>{pendingNotes.set(q.id,$('note').value);$('saveStatus').textContent='Saving…';clearTimeout(noteTimer);noteTimer=setTimeout(safe(flushNotes),600);};
@@ -71,12 +81,13 @@ function selectAnswer(letter){
 }
 async function answer(letter){
  if(busy||answered||!current||!letter)return;busy=true;$('checkAnswer').disabled=true;const qid=current.id;const version=loadVersion;
- $('workspace').querySelectorAll('.choice').forEach(b=>b.disabled=true);$('guessed').disabled=true;
+ $('workspace').querySelectorAll('.choice').forEach(b=>b.disabled=true);if($('numericAnswer'))$('numericAnswer').disabled=true;$('guessed').disabled=true;
  try{
   const result=await api('attempt',{question_id:qid,answer:letter,guessed:$('guessed').checked});
   if(version!==loadVersion){await refreshProgress();return;}answered=true;$('checkAnswer').textContent='Checked';$('notesPanel').hidden=false;$('showNotes').hidden=true;current.needs_review=result.needs_review;current.latest_correct=+result.is_correct;
   $('workspace').querySelectorAll('.choice').forEach(b=>{if(b.dataset.letter===result.correct_answer)b.classList.add('correct');if(b.dataset.letter===letter&&!result.is_correct)b.classList.add('wrong');});
-  $('feedback').innerHTML=`<div class="feedback"><h3>${result.is_correct?'Correct.':`Not quite. The correct answer is ${result.correct_answer}.`}</h3><span class="secondary-info">${result.needs_review?'Saved to your review queue.':'Attempt saved.'}</span><details ${result.is_correct?'':'open'}><summary>Why this answer works</summary>${SATCore.html(result.explanation_html)}</details></div>`;
+  const correctLabel=current.answer_type==='numeric'?result.correct_answer.split(',').map(x=>x.trim()).filter(Boolean).join(' or '):result.correct_answer;
+  $('feedback').innerHTML=`<div class="feedback"><h3>${result.is_correct?'Correct.':`Not quite. The correct answer is ${esc(correctLabel)}.`}</h3><span class="secondary-info">${result.needs_review?'Saved to your review queue.':'Attempt saved.'}</span><details ${result.is_correct?'':'open'}><summary>Why this answer works</summary>${SATCore.html(result.explanation_html)}</details></div>`;
   $('feedback').querySelector('.feedback details').insertAdjacentHTML('beforebegin',`<fieldset class="difficulty-rating"><legend>How did this feel?</legend><div>${['easy','medium','hard'].map(r=>`<button type="button" data-rating="${r}" aria-pressed="${current.my_difficulty===r}">${r[0].toUpperCase()+r.slice(1)}</button>`).join('')}</div><span id="ratingStatus" role="status">${current.my_difficulty?'Previous rating: '+current.my_difficulty+'. Change it if needed.':'Your rating is separate from the official difficulty.'}</span></fieldset>`);
   $('feedback').querySelectorAll('[data-rating]').forEach(b=>b.onclick=safe(async()=>{
    const rating=b.dataset.rating;
@@ -87,7 +98,7 @@ async function answer(letter){
   $('reviewToggle').textContent=result.needs_review?'✓ In review':'Mark for review';$('stateBadge').textContent=stateLabel(current);$('attemptInfo').textContent='Answer saved';
   const updated=await api('question/'+qid);if(version===loadVersion){current.history=updated.history;current.attempt_count=updated.attempt_count;const history=$('workspace').querySelector('.history');history.querySelector('summary').textContent=`Attempt history (${updated.history.length}) & source`;history.querySelector('ul').innerHTML=updated.history.map(h=>`<li>${esc(h.answered_at)} UTC · ${h.selected_answer} · ${h.is_correct?'Correct':'Incorrect'}${h.guessed?' · Guessed':''}</li>`).join('');}
   await refreshProgress();
- }catch(e){if(version===loadVersion&&!answered){$('workspace').querySelectorAll('.choice').forEach(b=>b.disabled=false);$('guessed').disabled=false;$('checkAnswer').disabled=false;}throw e;}finally{if(version===loadVersion)busy=false;}
+ }catch(e){if(version===loadVersion&&!answered){$('workspace').querySelectorAll('.choice').forEach(b=>b.disabled=false);if($('numericAnswer'))$('numericAnswer').disabled=false;$('guessed').disabled=false;$('checkAnswer').disabled=false;}throw e;}finally{if(version===loadVersion)busy=false;}
 }
 async function nextQuestion(){
  if(busy)return;await flushNotes();const pos=questions.findIndex(q=>q.id===current?.id);let next=pos>=0?questions[pos+1]:questions[0];
@@ -100,7 +111,7 @@ async function init(){
  document.addEventListener('click',e=>{if(!$('accountMenu').contains(e.target))$('accountMenu').open=false;});
  document.addEventListener('keydown',e=>{if(e.key==='Escape'){$('bankMenu').open=false;}});
  const banks=await api('banks');
- $('bankSelect').innerHTML=banks.map(b=>`<option value="${esc(b.id)}">${esc(b.name)}</option>`).join('');$('bankSelect').value=bank;
+ fillBanks(banks);
  $('sqliteBackup').href='/api/backup?bank='+encodeURIComponent(bank);$('sqliteBackup').hidden=!!window.SATOffline;
  $('openWebApp').hidden=!!window.SATOffline;
  $('sqliteBackup').onclick=safe(async e=>{e.preventDefault();if(busy){toast('Wait for your answer to finish saving.');return;}await flushNotes();location.href=$('sqliteBackup').href;});
@@ -131,11 +142,11 @@ async function init(){
  window.addEventListener('hashchange',safe(async()=>{const id=new URLSearchParams(location.hash.slice(1)).get('q');if(id&&id!==current?.id)await openQuestion(id);}));
  window.addEventListener('beforeunload',e=>{if(pendingNotes.size){e.preventDefault();e.returnValue='';}});
  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'&&pendingNotes.size)flushNotes().catch(fail);});
- document.addEventListener('keydown',e=>{if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)||e.ctrlKey||e.metaKey||e.altKey||$('practiceView').hidden)return;if(/^[a-d]$/i.test(e.key)&&current&&!answered)selectAnswer(e.key.toUpperCase());});
+ document.addEventListener('keydown',e=>{if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)||e.ctrlKey||e.metaKey||e.altKey||$('practiceView').hidden)return;if(/^[a-d]$/i.test(e.key)&&current?.answer_type!=='numeric'&&!answered)selectAnswer(e.key.toUpperCase());});
  const imported=sessionStorage.getItem('sat-import-result');if(imported){sessionStorage.removeItem('sat-import-result');$('error').textContent=imported;$('error').classList.add('success');$('error').hidden=false;}
  if(window.SATCloud&&window.SATOffline){
   window.addEventListener('sat-cloud-updated',safe(async()=>{
-   const banks=await api('banks');$('bankSelect').innerHTML=banks.map(b=>`<option value="${esc(b.id)}">${esc(b.name)}</option>`).join('');$('bankSelect').value=bank;
+   const banks=await api('banks');fillBanks(banks);
    meta=await api('meta');fillSkills();fillTags();await refreshProgress();
    if(current){const id=current.id,version=loadVersion,q=await api('question/'+id);if(version!==loadVersion)return;
     if(!pendingNotes.has(id)&&document.activeElement!==$('note')){$('note').value=q.note;noteParents.set(id,q.note_parents);}

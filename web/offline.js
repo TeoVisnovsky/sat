@@ -17,9 +17,11 @@ window.SATOffline=(function(){
   });
  }
  const ready=(async()=>{
-  if(await transaction(storageKey('main'),false,r=>!!r))return;
-  const response=await fetch('./seed.json');if(!response.ok)throw Error('Connect once to download the question bank.');const data=SATCore.validate(await response.json());
-  await transaction(storageKey('main'),true,(existing,store)=>{if(!existing)store.put(makeRecord('main','SAT English · original bank',data));});
+  for(const seed of [{id:'main',file:'seed.json',name:'SAT English · original bank'},{id:'math',file:'math-seed.json',name:'SAT Math · original bank'}]){
+   if(await transaction(storageKey(seed.id),true,(r,store)=>{if(!r)return false;const before=SATCore.canonical(r.data);SATCore.validate(r.data);if(SATCore.canonical(r.data)!==before)store.put(touch(r));return true;}))continue;
+   const response=await fetch('./'+seed.file);if(!response.ok)throw Error('Connect once to download both question banks.');const data=SATCore.validate(await response.json());
+   await transaction(storageKey(seed.id),true,(existing,store)=>{if(!existing)store.put(makeRecord(seed.id,seed.name,data));});
+  }
  })();
  async function request(bank,path,body){await ready;if(path==='banks')return transaction(null,false,rs=>rs.filter(belongs).map(r=>({id:r.id||r.key,name:r.name})));const result=await transaction(storageKey(bank),body!==undefined,(r,store)=>{if(!r||!belongs(r))throw Error('Database not found. Choose another database.');const result=SATCore.request(r.data,path,body);if(body!==undefined)store.put(touch(r));return result;});if(body!==undefined)changed();return result;}
  async function importFile(bank,file,mode){

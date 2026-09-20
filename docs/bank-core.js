@@ -1,10 +1,16 @@
 /* Portable bank v1. Pure merge functions shared by the offline adapter and tests. */
 (function(root){
  'use strict';
- const fields=['id','domain','skill','difficulty','passage_html','prompt_html','correct_answer','explanation_html','choices'];
+ const fields=['id','domain','skill','difficulty','passage_html','prompt_html','answer_type','correct_answer','accepted_answers','explanation_html','choices'];
  const levels=['easy','medium','hard'];
  const uid=()=>crypto.randomUUID(),now=()=>new Date().toISOString();
  const canonical=x=>JSON.stringify(x&&typeof x==='object'?Array.isArray(x)?x.map(v=>JSON.parse(canonical(v))):Object.fromEntries(Object.keys(x).sort().map(k=>[k,JSON.parse(canonical(x[k]))])):x);
+ function numeric(value){
+  value=String(value??'').trim().replace(/−/g,'-');if(value.length>30||!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+|\d+\/[+-]?\d+)$/.test(value))return null;
+  let n,d;if(value.includes('/')){[n,d]=value.split('/').map(BigInt);}else{const sign=value.startsWith('-')?-1n:1n,clean=value.replace(/^[+-]/,'');const [whole='',part='']=clean.split('.');d=10n**BigInt(part.length);n=sign*BigInt((whole||'0')+part);}
+  if(!d)return null;if(d<0n){n=-n;d=-d;}const gcd=(a,b)=>{a=a<0n?-a:a;while(b){[a,b]=[b,a%b];}return a;},g=gcd(n,d);return [n/g,d/g];
+ }
+ function answerCorrect(q,value){if((q.answer_type||'choice')==='choice')return value===q.correct_answer;const n=numeric(value);return !!n&&q.accepted_answers.some(x=>{const a=numeric(x);return a&&a[0]*n[1]===n[0]*a[1];});}
  const leaves=vs=>{const parents=new Set(vs.flatMap(v=>v.parents));return vs.filter(v=>!parents.has(v.id)).sort((a,b)=>a.updated_at.localeCompare(b.updated_at)||a.id.localeCompare(b.id));};
  const noteText=vs=>[...new Set(leaves(vs).map(v=>v.content))].join('\n\n—— Other device’s note ——\n\n');
  function validate(data){
@@ -17,9 +23,11 @@
   const qs=new Map();
   for(const q of data.questions){
    identity(q.id);check(!qs.has(q.id),'Duplicate question ID');qs.set(q.id,q);
-   text(q.domain,200);text(q.skill,200);check(levels.includes(q.difficulty)&&['A','B','C','D'].includes(q.correct_answer));
+   q.answer_type=q.answer_type||'choice';q.accepted_answers=q.accepted_answers||[q.correct_answer];
+   text(q.domain,200);text(q.skill,200);check(levels.includes(q.difficulty)&&['choice','numeric'].includes(q.answer_type));
+   check(q.answer_type==='choice'?['A','B','C','D'].includes(q.correct_answer):Array.isArray(q.accepted_answers)&&q.accepted_answers.length&&q.accepted_answers.every(x=>typeof x==='string'&&numeric(x)),'Invalid question answer');
    for(const key of ['passage_html','prompt_html','explanation_html'])text(q[key]);check(q.prompt_html.trim());
-   check(Array.isArray(q.choices)&&q.choices.map(c=>c.letter).sort().join('')==='ABCD','Four choices A–D are required');q.choices.sort((a,b)=>a.letter.localeCompare(b.letter));
+   check(Array.isArray(q.choices)&&q.choices.map(c=>c.letter).sort().join('')===(q.answer_type==='choice'?'ABCD':''),'Answer choices do not match the question type');q.choices.sort((a,b)=>a.letter.localeCompare(b.letter));
    for(const c of q.choices)text(c.content_html);
    for(const s of q.sources||[]){text(s.filename,250);text(s.file_sha256,100);check(Number.isInteger(s.page_start)&&Number.isInteger(s.page_end)&&s.page_start>=1&&s.page_end>=s.page_start);}
   }
@@ -30,7 +38,7 @@
     if(key==='tags'){text(r.name,60);check(r.name.trim(),'Empty tag');continue;}
     identity(r.id);const unique=['ratings','reviews'].includes(key)?r.question_id:r.id;check(!seen.has(unique),'Duplicate record ID');seen.add(unique);
     const date=key==='attempts'?'answered_at':'updated_at';check(typeof r[date]==='string'&&Number.isFinite(Date.parse(r[date])),'Invalid timestamp');r[date]=new Date(r[date]).toISOString();
-    if(key==='attempts'){check(['A','B','C','D'].includes(r.selected_answer)&&[0,1,false,true].includes(r.guessed)&&[0,1,false,true].includes(r.is_correct)&&+r.is_correct===+(r.selected_answer===qs.get(r.question_id).correct_answer),'Invalid attempt');r.guessed=+r.guessed;r.is_correct=+r.is_correct;}
+    if(key==='attempts'){check(typeof r.selected_answer==='string'&&r.selected_answer.length<=30&&[0,1,false,true].includes(r.guessed)&&[0,1,false,true].includes(r.is_correct)&&+r.is_correct===+answerCorrect(qs.get(r.question_id),r.selected_answer),'Invalid attempt');r.guessed=+r.guessed;r.is_correct=+r.is_correct;}
     if(key==='notes'){text(r.content,20000);check(Array.isArray(r.parents));}
     if(key==='ratings')check(levels.includes(r.rating));
     if(key==='reviews'){check([0,1,false,true].includes(r.needs_review));r.needs_review=+r.needs_review;}
@@ -60,7 +68,7 @@
   return {domains,skills,tags:tags.sort((a,b)=>a.name.localeCompare(b.name))};
  }
  const attempts=(data,id)=>data.attempts.filter(a=>a.question_id===id).sort((a,b)=>a.answered_at.localeCompare(b.answered_at)||a.id.localeCompare(b.id));
- function row(data,q,meta){const history=attempts(data,q.id),last=history.at(-1),domain=meta.domains.find(d=>d.name===q.domain),skill=meta.skills.find(s=>s.domain_id===domain.id&&s.name===q.skill);return {id:q.id,skill_id:skill.id,domain_id:domain.id,skill:q.skill,domain:q.domain,difficulty:q.difficulty,passage_html:q.passage_html,prompt_html:q.prompt_html,my_difficulty:data.ratings.find(r=>r.question_id===q.id)?.rating||null,latest_correct:last?+last.is_correct:null,latest_guessed:last?+last.guessed:null,last_attempt:last?.answered_at,needs_review:+(data.reviews.find(r=>r.question_id===q.id)?.needs_review||0),attempt_count:history.length};}
+ function row(data,q,meta){const history=attempts(data,q.id),last=history.at(-1),domain=meta.domains.find(d=>d.name===q.domain),skill=meta.skills.find(s=>s.domain_id===domain.id&&s.name===q.skill);return {id:q.id,skill_id:skill.id,domain_id:domain.id,skill:q.skill,domain:q.domain,difficulty:q.difficulty,passage_html:q.passage_html,prompt_html:q.prompt_html,answer_type:q.answer_type||'choice',my_difficulty:data.ratings.find(r=>r.question_id===q.id)?.rating||null,latest_correct:last?+last.is_correct:null,latest_guessed:last?+last.guessed:null,last_attempt:last?.answered_at,needs_review:+(data.reviews.find(r=>r.question_id===q.id)?.needs_review||0),attempt_count:history.length};}
  function request(data,path,body){
   const url=new URL(path,'https://sat.invalid/'),p=url.searchParams,meta=metadata(data);
   if(body===undefined){
@@ -80,8 +88,8 @@
   const q=data.questions.find(q=>q.id===body.question_id);if(!q)throw Error('Question not found');
   const setState=(key,value)=>{data[key]=data[key].filter(r=>r.question_id!==q.id);data[key].push({id:uid(),question_id:q.id,updated_at:now(),...value});};
   if(path==='attempt'){
-   if(!['A','B','C','D'].includes(body.answer)||typeof body.guessed!=='boolean')throw Error('Choose A, B, C, or D');
-   const correct=body.answer===q.correct_answer,review=+(!correct||body.guessed),id=uid();data.attempts.push({id,question_id:q.id,selected_answer:body.answer,is_correct:+correct,guessed:+body.guessed,answered_at:now()});setState('reviews',{needs_review:review});return {attempt_id:id,is_correct:correct,correct_answer:q.correct_answer,explanation_html:q.explanation_html,needs_review:review};
+   if(typeof body.answer!=='string'||body.answer.length>30||typeof body.guessed!=='boolean'||((q.answer_type||'choice')==='choice'&&!['A','B','C','D'].includes(body.answer))||((q.answer_type||'choice')==='numeric'&&!numeric(body.answer)))throw Error((q.answer_type||'choice')==='choice'?'Choose A, B, C, or D':'Enter a number, decimal, or fraction');
+   body.answer=body.answer.trim().replace(/−/g,'-');const correct=answerCorrect(q,body.answer),review=+(!correct||body.guessed),id=uid();data.attempts.push({id,question_id:q.id,selected_answer:body.answer,is_correct:+correct,guessed:+body.guessed,answered_at:now()});setState('reviews',{needs_review:review});return {attempt_id:id,is_correct:correct,correct_answer:q.correct_answer,explanation_html:q.explanation_html,needs_review:review};
   }
   if(path==='note'){if(typeof body.content!=='string'||body.content.length>20000)throw Error('Note is too long');const vs=data.notes.filter(n=>n.question_id===q.id),parents=body.parents===undefined?leaves(vs).map(v=>v.id):body.parents;if(!Array.isArray(parents)||parents.some(id=>!vs.some(n=>n.id===id)))throw Error('Note history changed. Reopen the question before editing.');if(noteText(vs)===body.content)return {saved:true,note_parents:leaves(vs).map(n=>n.id)};const id=uid();data.notes.push({id,question_id:q.id,content:body.content,updated_at:now(),parents});return {saved:true,note_parents:[id]};}
   else if(path==='difficulty'){if(!levels.includes(body.rating))throw Error('Invalid difficulty');setState('ratings',{rating:body.rating});}
@@ -93,10 +101,22 @@
  // Keep imported markup inert while retaining SAT tables, emphasis and inline SVG charts.
  function html(value){
   const template=document.createElement('template');template.innerHTML=String(value||'');
-  const allowed=new Set('p span em strong i b u sup sub br ul ol li figure figcaption blockquote div table caption thead tbody tfoot tr th td svg g defs pattern line text rect marker polygon path circle'.split(' '));
-  const attrs=new Set('aria-label aria-hidden role viewbox width height xmlns id x y x1 x2 y1 y2 cx cy r d points transform fill stroke stroke-width stroke-linecap stroke-linejoin stroke-dasharray text-anchor font-family font-size patterntransform patternunits markerwidth markerheight refx refy orient marker-end marker-start colspan rowspan scope'.split(' '));
-  for(const el of [...template.content.querySelectorAll('*')]){if(!allowed.has(el.localName.toLowerCase())){el.replaceWith(document.createTextNode(el.textContent));continue;}for(const a of [...el.attributes]){const name=a.name.toLowerCase();if(name==='style'&&a.value==='text-decoration:underline')continue;if(name==='class'&&a.value==='sr-only')continue;if(!attrs.has(name)||/javascript:|https?:|data:/i.test(a.value))el.removeAttribute(a.name);}}
+  const allowed=new Set('p span em strong i b u sup sub br ul ol li cite figure figcaption blockquote div table caption thead tbody tfoot tr th td svg g defs pattern line text rect marker polygon polyline path circle ellipse use clippath math mrow mi mo mn mfrac msup msub msubsup msqrt mroot mtable mtr mtd mtext mspace mfenced mover munder munderover mmultiscripts mprescripts none menclose mstyle semantics annotation'.split(' '));
+  const attrs=new Set('aria-label aria-hidden role viewbox width height xmlns xmlns:xlink version id x y dx dy x1 x2 y1 y2 cx cy rx ry r d points transform fill stroke stroke-width stroke-linecap stroke-linejoin stroke-miterlimit stroke-dasharray opacity isolation dominant-baseline text-anchor font-family font-size patterntransform patternunits markerunits markerwidth markerheight refx refy orient marker-end marker-start colspan rowspan scope alttext display displaystyle mathvariant stretchy fence separator form notation bevelled columnalign rowalign clip-path href xlink:href'.split(' '));
+ // <mfenced> was dropped from MathML Core, so brackets would silently vanish. Rebuild them as <mrow><mo>…</mo></mrow>.
+  const MATHML='http://www.w3.org/1998/Math/MathML';
+  for(let el;(el=template.content.querySelector('mfenced'));){
+   const mo=text=>{const node=document.createElementNS(MATHML,'mo');node.textContent=text;return node;};
+   const row=document.createElementNS(MATHML,'mrow'),opener=el.getAttribute('open')??'(',closer=el.getAttribute('close')??')';
+   const seps=(el.getAttribute('separators')??',').replace(/\s+/g,''),kids=[...el.children];
+   if(opener)row.appendChild(mo(opener));
+   kids.forEach((kid,i)=>{if(i&&seps)row.appendChild(mo(seps[Math.min(i-1,seps.length-1)]));row.appendChild(kid);});
+   if(closer)row.appendChild(mo(closer));
+   el.replaceWith(row);
+  }
+  const safeStyle=value=>value.split(';').map(x=>x.trim()).filter(x=>/^(?:fill|stroke|stroke-width|stroke-linecap|stroke-linejoin|stroke-miterlimit|stroke-dasharray|opacity|isolation|font-size|font-family|text-anchor|text-decoration)\s*:\s*[-#(),.%\w\s]+$/i.test(x)).join(';');
+  for(const el of [...template.content.querySelectorAll('*')]){if(['style','script'].includes(el.localName.toLowerCase())){el.remove();continue;}if(!allowed.has(el.localName.toLowerCase())){el.replaceWith(document.createTextNode(el.textContent));continue;}for(const a of [...el.attributes]){const name=a.name.toLowerCase();if(name==='style'){const value=safeStyle(a.value);if(value)el.setAttribute('style',value);else el.removeAttribute(a.name);continue;}if(name==='class'&&a.value==='sr-only')continue;if(!attrs.has(name)||/javascript:|https?:|data:/i.test(a.value))el.removeAttribute(a.name);}}
   return template.innerHTML;
  }
- const api={uid,now,validate,merge,leaves,noteText,request,canonical,html};root.SATCore=api;if(typeof module!=='undefined')module.exports=api;
+ const api={uid,now,validate,merge,leaves,noteText,request,canonical,html,numeric,answerCorrect};root.SATCore=api;if(typeof module!=='undefined')module.exports=api;
 })(globalThis);

@@ -21,5 +21,10 @@ if(process.argv[2]){
  const idClash=structuredClone(a);idClash.attempts[0].guessed=1;assert.throws(()=>core.merge(a,idClash),/Conflicting history/);
  const badParent=structuredClone(a);badParent.notes[0].parents=['missing'];assert.throws(()=>core.validate(badParent),/Broken note/);
  assert.throws(()=>core.request(a,'attempt',{question_id:q.id,answer:'X',guessed:false}));
+ const math=core.validate(JSON.parse(fs.readFileSync('docs/math-seed.json','utf8'))),numeric=math.questions.find(q=>q.answer_type==='numeric'&&q.accepted_answers.length>1);
+ assert.equal(math.questions.length,536);assert(numeric);const equivalent=numeric.accepted_answers.at(-1);
+ assert(core.request(math,'attempt',{question_id:numeric.id,answer:equivalent,guessed:false}).is_correct);
+ assert(!core.request(math,'attempt',{question_id:numeric.id,answer:'999999',guessed:false}).is_correct);
+ assert.throws(()=>core.request(math,'attempt',{question_id:numeric.id,answer:'2+2',guessed:false}),/number/);
  assert.equal(base.attempts.length,0);console.log('Offline core: idempotency, note resolution, filters, conflicts and validation passed.');
 }

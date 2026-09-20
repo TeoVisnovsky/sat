@@ -27,19 +27,58 @@ def choice_norm(s):
     return re.sub(r'\s+','',unicodedata.normalize('NFC',html.unescape(re.sub('<[^>]+>','',s))))
 
 class Cleaner(HTMLParser):
-    allowed={'p','span','em','strong','i','b','u','sup','sub','br','ul','ol','li','figure','figcaption','blockquote','div','table','caption','thead','tbody','tfoot','tr','th','td','svg','g','defs','pattern','line','text','rect','marker','polygon','path','circle'}
-    attrs={'aria-label','aria-hidden','role','viewbox','width','height','xmlns','id','x','y','x1','x2','y1','y2','cx','cy','r','d','points','transform','fill','stroke','stroke-width','stroke-linecap','stroke-linejoin','stroke-dasharray','text-anchor','font-family','font-size','patterntransform','patternunits','markerwidth','markerheight','refx','refy','orient','marker-end','marker-start','colspan','rowspan','scope'}
+    allowed={'p','span','em','strong','i','b','u','sup','sub','br','ul','ol','li','cite','figure','figcaption','blockquote','div','table','caption','thead','tbody','tfoot','tr','th','td','svg','g','defs','pattern','line','text','rect','marker','polygon','polyline','path','circle','ellipse','use','clippath','math','mrow','mi','mo','mn','mfrac','msup','msub','msubsup','msqrt','mroot','mtable','mtr','mtd','mtext','mspace','mfenced','mover','munder','munderover','mmultiscripts','mprescripts','none','menclose','mstyle','semantics','annotation'}
+    attrs={'aria-label','aria-hidden','role','viewbox','width','height','xmlns','xmlns:xlink','version','id','x','y','dx','dy','x1','x2','y1','y2','cx','cy','rx','ry','r','d','points','transform','fill','stroke','stroke-width','stroke-linecap','stroke-linejoin','stroke-miterlimit','stroke-dasharray','opacity','isolation','dominant-baseline','text-anchor','font-family','font-size','patterntransform','patternunits','markerunits','markerwidth','markerheight','refx','refy','orient','marker-end','marker-start','colspan','rowspan','scope','alttext','display','displaystyle','mathvariant','stretchy','fence','separator','form','notation','bevelled','columnalign','rowalign','clip-path','href','xlink:href'}
     cases={'viewbox':'viewBox','patterntransform':'patternTransform','patternunits':'patternUnits','markerwidth':'markerWidth','markerheight':'markerHeight','refx':'refX','refy':'refY'}
-    def __init__(self):super().__init__(convert_charrefs=True);self.out=[]
+    def __init__(self):super().__init__(convert_charrefs=True);self.out=[];self.blocked=0;self.fences=[]
+    def fence_separator(self):
+        """Emit the separator that precedes the next direct child of an open <mfenced>."""
+        if not self.fences:return
+        fence=self.fences[-1]
+        if fence['depth']:return
+        if fence['count']:
+            seps=fence['separators']
+            if seps:self.out.append('<mo>'+html.escape(seps[min(fence['count']-1,len(seps)-1)])+'</mo>')
+        fence['count']+=1
     def handle_starttag(self,tag,attrs):
+        if tag in ('style','script'):self.blocked+=1;return
+        if self.blocked:return
+        if tag=='mfenced':
+            values={k:v for k,v in attrs}
+            self.fence_separator()
+            for fence in self.fences:fence['depth']+=1
+            opener=values.get('open','(') or ''
+            self.fences.append({'close':values.get('close',')') or '','separators':''.join((values.get('separators',',') if values.get('separators') is not None else ',').split()),'depth':0,'count':0})
+            self.out.append('<mrow>'+('<mo>'+html.escape(opener)+'</mo>' if opener else ''))
+            return
         if tag in self.allowed:
+            self.fence_separator()
+            if tag!='br':
+                for fence in self.fences:fence['depth']+=1
+            styles=[]
+            for k,v in attrs:
+                if k=='style':styles=[x.strip() for x in v.split(';') if re.fullmatch(r'(?:fill|stroke|stroke-width|stroke-linecap|stroke-linejoin|stroke-miterlimit|stroke-dasharray|opacity|isolation|font-size|font-family|text-anchor)\s*:\s*[-#(),.%\w\s]+',x.strip(),re.I)]
             underline=any(k=='style' and 'underline' in v for k,v in attrs)
             safe=''.join(' '+self.cases.get(k,k)+'="'+html.escape(v,quote=True)+'"' for k,v in attrs if k in self.attrs and v is not None and not re.search(r'javascript:|https?:|data:',v,re.I))
             if any(k=='class' and v=='sr-only' for k,v in attrs):safe+=' class="sr-only"'
-            self.out.append('<'+tag+safe+(' style="text-decoration:underline"' if underline else '')+'>')
+            style=';'.join(styles+(['text-decoration:underline'] if underline else []))
+            self.out.append('<'+tag+safe+(' style="'+html.escape(style,quote=True)+'"' if style else '')+'>')
     def handle_endtag(self,tag):
-        if tag in self.allowed and tag!='br':self.out.append('</'+tag+'>')
-    def handle_data(self,data):self.out.append(html.escape(data))
+        if tag in ('style','script'):
+            if self.blocked:self.blocked-=1
+            return
+        if self.blocked:return
+        if tag=='mfenced':
+            if not self.fences:return
+            fence=self.fences.pop()
+            self.out.append(('<mo>'+html.escape(fence['close'])+'</mo>' if fence['close'] else '')+'</mrow>')
+            for open_fence in self.fences:open_fence['depth']-=1
+            return
+        if tag in self.allowed and tag!='br':
+            for fence in self.fences:fence['depth']-=1
+            self.out.append('</'+tag+'>')
+    def handle_data(self,data):
+        if not self.blocked:self.out.append(html.escape(data))
 
 def clean(s):
     s=re.sub(r'<span[^>]*class=["\']sr-only["\'][^>]*>.*?</span>','',s,flags=re.S)

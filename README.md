@@ -1,10 +1,10 @@
-# SAT English Trainer
+# SAT Trainer
 
-A minimal SAT Reading & Writing practice app with **753 questions**, answers and explanations, charts, and saved progress. Use the same offline web app on your PC and phone. Sign in with Google to sync your own progress automatically, or practice without an account on one device. Friends can use their own Google accounts and get independent progress. No Python or Codex installation is needed for the website.
+A minimal SAT practice app with two separate question banks — **753 Reading & Writing questions** and **536 Math questions** — with answers, explanations, charts, and saved progress. Use the same offline web app on your PC and phone. Sign in with Google to sync your own progress automatically, or practice without an account on one device. Friends can use their own Google accounts and get independent progress. No Python or Codex installation is needed for the website.
 
 ## Start on PC or phone
 
-Open **[SAT English](https://teovisnovsky.github.io/sat/)** and choose **Account → Sign in with Google** on each device. Use the same Google account for your own devices. Answers, notes, difficulty ratings and question banks save locally first and sync when the app is open and connected. The header shows **Synced**, **Changes waiting**, or an offline/retry status; click it to retry and open **Account** for details.
+Open **[SAT Trainer](https://teovisnovsky.github.io/sat/)** and choose **Account → Sign in with Google** on each device. Switch between the English and Math banks under **Databases → Database**; the header shows which one is open. Each bank keeps its own questions, attempts, notes, ratings, tags and progress. Use the same Google account for your own devices. Answers, notes, difficulty ratings and question banks save locally first and sync when the app is open and connected. The header shows **Synced**, **Changes waiting**, or an offline/retry status; click it to retry and open **Account** for details.
 
 On PC, bookmark the site, use the browser's install option, or double-click **Start SAT Web.url** from the download. You no longer need to keep a local server running. The original Python service remains available below as a separate offline option.
 
@@ -77,7 +77,8 @@ Keep the terminal open while practicing. Press **Ctrl+C** to stop the server. No
 ## How to practice
 
 - Filter by category, skill, official difficulty, progress, personal difficulty, or tag. Search by question ID or passage text.
-- Select A, B, C, or D. You can change your selection freely; the A-D keys also work.
+- Multiple-choice questions: select A, B, C, or D. You can change your selection freely; the A-D keys also work.
+- Math student-produced responses: type a number, decimal, or fraction and press Enter or **Check**. Equivalent forms are accepted, so `18/11`, `36/22` and `1.636` all count for the same answer. Only digits, a sign, one decimal point, or one fraction bar are accepted.
 - Optionally tick **I am unsure / guessing**, then click **Check**. Only Check records an attempt and reveals the answer.
 - Rate **How did this feel?** as Easy, Medium, or Hard. **My difficulty** filters use your latest rating, independently of the official difficulty.
 - Notes stay hidden when you open a question. Check an answer to reveal them, or choose **Show notes without answering** to review without recording an attempt. Notes autosave; **Save now** saves immediately.
@@ -91,11 +92,11 @@ The web app saves on each device and syncs to the signed-in account. Each friend
 
 Open the compact **Databases** menu in the header to switch banks or **Import / merge**.
 
-- `sat-clean.db`: the included template with all 753 questions and no attempts, notes, review flags, personal tags, or difficulty ratings.
-- `sat.db`: your original working bank, created automatically on first launch.
+- `sat-clean.db` / `sat-math-clean.db`: the included templates with all 753 English and 536 Math questions and no attempts, notes, review flags, personal tags, or difficulty ratings.
+- `sat.db` and `sat-math.db`: your original working banks, created automatically on first launch.
 - `databases/`: your imported working banks.
 
-To start a separate fresh run on PC, import `sat-clean.db` and choose **Add as separate database**. For either device, the download also contains `docs/seed.json`, a clean portable bank with the same 753 questions. Import that file as a separate database. Your existing history stays in its original bank; the template stays clean.
+To start a separate fresh run on PC, import `sat-clean.db` and choose **Add as separate database**. For either device, the download also contains `docs/seed.json` and `docs/math-seed.json`, clean portable banks with the same 753 English and 536 Math questions. Import either file as a separate database. Your existing history stays in its original bank; the template stays clean.
 
 Both versions accept **SAT transfer files** (`.satbank.json` / `.json`) up to 50 MB. The PC also accepts compatible **SAT Trainer SQLite files** (`.db`, `.sqlite`, `.sqlite3`), including older backups, with either add or merge. To move an old `.db` onto your phone, first import it on the PC and use **Export**. Arbitrary SQLite files and PDFs cannot be uploaded through this control. Optional original PDF image previews remain available in the original PC bank; portable banks include text and inline charts.
 
@@ -122,9 +123,17 @@ If using Git, working databases, imported banks, logs, and temporary files are i
 
 ## Question data
 
-The included bank has 753 unique Reading & Writing questions across four domains and ten skills. PDF exports omitted the instruction lines; these were recovered from College Board's API by matching all four choices (including punctuation), checking the passage and correct answer, and retaining both export IDs and official references. All 753 matched with no unresolved conflicts.
+### English
+
+The English bank has 753 unique Reading & Writing questions across four domains and ten skills. PDF exports omitted the instruction lines; these were recovered from College Board's API by matching all four choices (including punctuation), checking the passage and correct answer, and retaining both export IDs and official references. All 753 matched with no unresolved conflicts.
 
 Questions, prompts, choices, explanations, and inline charts are in the database. Original PDF passage previews are in `assets/`. No personal study history is distributed.
+
+### Math
+
+The Math bank has 536 questions from `sat-math-answers-emh-part-*.pdf` across four domains and nineteen skills: Algebra (168), Advanced Math (132), Problem-Solving and Data Analysis (87), and Geometry and Trigonometry (149). 383 are multiple choice and 153 are student-produced responses whose accepted numeric forms are stored alongside the question.
+
+Formulas are stored as MathML and graphs as inline SVG, so both scale with the page and stay searchable and readable offline — no images are needed. Tables keep their real table markup. `<mfenced>` was removed from browsers' MathML, so the importer rewrites it to `<mrow><mo>(</mo>…<mo>)</mo></mrow>`; without that, brackets silently disappear from over half the bank.
 
 Question content belongs to College Board. This is an unofficial practice tool, not affiliated with or endorsed by College Board.
 
@@ -143,16 +152,17 @@ python build_phone.py
 
 Tests use disposable copies and leave your study history untouched. Node 22+ is needed for development tests and refreshing the vendored SDK (`npm run vendor`), not to use the app. The SDK is included in the repository so Python alone can rebuild the website.
 
-`build_phone.py` generates `docs/` from `web/` and **sat-clean.db only**, and refuses to build if that template contains personal progress. Commit the generated files after changing the shared UI. GitHub Pages serves **main → /docs**. You can also serve that directory from another HTTPS static host. Preview it locally at `http://127.0.0.1:8765/phone/`; this preview has separate browser storage from the PC database and the public phone URL.
+`build_phone.py` generates `docs/` from `web/` and **sat-clean.db and sat-math-clean.db only**, and refuses to build if either template contains personal progress. Commit the generated files after changing the shared UI. GitHub Pages serves **main → /docs**. You can also serve that directory from another HTTPS static host. Preview it locally at `http://127.0.0.1:8765/phone/`; this preview has separate browser storage from the PC database and the public phone URL.
 
 ### Optional PDF rebuild
 
-Rebuilding needs PyMuPDF and your answer PDFs in the project folder, named `sat-rw-answers-*.pdf`:
+Rebuilding needs PyMuPDF and your answer PDFs in the project folder, named `sat-rw-answers-*.pdf` for English and `sat-math-answers-*.pdf` for Math:
 
 ```sh
 python -m pip install -r requirements.txt
 python import_pdfs.py
 python recover_prompts.py
+python import_math.py
 ```
 
 Run both steps. Recovery needs internet unless official responses are cached in `source-cache/`. Source PDFs and that cache are not required for practice and are not distributed in this repository. Reimporting preserves attempts, notes, tags, and ratings. Import reports contain the validation results.

@@ -1,5 +1,6 @@
 *.db
 !sat-clean.db
+!sat-math-clean.db
 *.db-journal
 *.db-wal
 *.db-shm

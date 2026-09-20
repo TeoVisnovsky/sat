@@ -8,18 +8,20 @@ from contextlib import contextmanager
 
 ROOT=Path(__file__).resolve().parent
 DB=ROOT/'sat.db'
+MATH_DB=ROOT/'sat-math.db'
 BANKS=ROOT/'databases'
 
-def initialize_database(path):
+def initialize_database(path,template=None):
     """Make a personal working copy on first launch; never replace existing progress."""
     if path.exists():return
-    template=ROOT/'sat-clean.db'
-    if not template.is_file():raise FileNotFoundError('sat-clean.db is missing. Download and extract the complete repository.')
+    template=template or ROOT/'sat-clean.db'
+    if not template.is_file():raise FileNotFoundError(template.name+' is missing. Download and extract the complete repository.')
     # Exclusive creation protects an existing database from concurrent launches.
     with template.open('rb') as source, path.open('xb') as target:shutil.copyfileobj(source,target)
 
 def bank_path(key='main'):
     if key=='main':return DB
+    if key=='math':return MATH_DB
     if not isinstance(key,str) or len(key)!=32 or any(c not in '0123456789abcdef' for c in key):raise ValueError('Unknown database')
     path=BANKS/(key+'.db')
     if not path.is_file():raise ValueError('Database not found')
@@ -34,6 +36,7 @@ def import_bank(raw,name):
         try:
             db.execute('PRAGMA trusted_schema=OFF')
             if db.execute('PRAGMA integrity_check').fetchone()[0]!='ok':raise ValueError('Database is damaged')
+            transfer.migrate(db);db.commit()
             expected=sqlite3.connect(':memory:')
             try:
                 expected.executescript((ROOT/'schema.sql').read_text())
@@ -45,7 +48,7 @@ def import_bank(raw,name):
             finally:expected.close()
             if db.execute("SELECT COUNT(*) FROM sqlite_master WHERE type IN ('trigger','view')").fetchone()[0]:raise ValueError('Databases with triggers or views are not supported')
             if db.execute('PRAGMA foreign_key_check').fetchall():raise ValueError('Database contains broken references')
-            if db.execute("SELECT COUNT(*) FROM questions q WHERE (SELECT COUNT(*) FROM choices c WHERE c.question_id=q.id)!=4 OR NOT EXISTS(SELECT 1 FROM choices c WHERE c.question_id=q.id AND c.letter=q.correct_answer) OR prompt_html='' ").fetchone()[0]:raise ValueError('Questions must have a prompt, four choices, and a valid answer')
+            if db.execute("SELECT COUNT(*) FROM questions q WHERE prompt_html='' OR (answer_type='choice' AND ((SELECT COUNT(*) FROM choices c WHERE c.question_id=q.id)!=4 OR NOT EXISTS(SELECT 1 FROM choices c WHERE c.question_id=q.id AND c.letter=q.correct_answer))) OR (answer_type='numeric' AND (SELECT COUNT(*) FROM choices c WHERE c.question_id=q.id)!=0)").fetchone()[0]:raise ValueError('Questions have invalid answer controls')
             from recover_prompts import clean
             for qid,passage,prompt,explanation in db.execute('SELECT id,passage_html,prompt_html,explanation_html FROM questions').fetchall():
                 if not isinstance(qid,str) or not 1<=len(qid)<=80 or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-' for c in qid):raise ValueError('Invalid question ID')
@@ -70,7 +73,7 @@ def connect(path=None):
         with db:yield db
     finally:db.close()
 
-BASE='''SELECT q.id,q.skill_id,q.difficulty,q.passage_html,q.prompt_html,s.name skill,d.name domain,d.id domain_id,
+BASE='''SELECT q.id,q.skill_id,q.difficulty,q.passage_html,q.prompt_html,q.answer_type,s.name skill,d.name domain,d.id domain_id,
  (SELECT rating FROM personal_difficulty WHERE question_id=q.id) my_difficulty,
  a.is_correct latest_correct,a.guessed latest_guessed,a.answered_at last_attempt,
  COALESCE(r.needs_review,0) needs_review,
@@ -96,6 +99,7 @@ class Handler(BaseHTTPRequestHandler):
         if path=='/phone':self.send_response(302);self.send_header('Location','/phone/');self.end_headers();return
         if path=='/api/banks':
             banks=[{'id':'main','name':'SAT English · original bank'}]
+            if MATH_DB.is_file():banks.append({'id':'math','name':'SAT Math · original bank'})
             for file in sorted(BANKS.glob('*.db')):
                 label=file.with_suffix('.json')
                 banks.append({'id':file.stem,'name':json.loads(label.read_text(encoding='utf-8'))['name'] if label.exists() else file.stem})
@@ -213,9 +217,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not q:self.respond({'error':'Question not found'},404);return
                 if self.path=='/api/attempt':
                     selected=data.get('answer');guessed=data.get('guessed',False)
-                    if not isinstance(selected,str) or selected not in ('A','B','C','D'):raise ValueError('Choose A, B, C, or D')
+                    if not isinstance(selected,str) or len(selected)>30 or (q['answer_type']=='choice' and selected not in ('A','B','C','D')) or (q['answer_type']=='numeric' and transfer.numeric(selected) is None):raise ValueError('Choose A, B, C, or D' if q['answer_type']=='choice' else 'Enter a number, decimal, or fraction')
                     if not isinstance(guessed,bool):raise ValueError('Invalid guessed value')
-                    correct=selected==q['correct_answer']
+                    selected=selected.strip().replace('−','-');question=dict(q);question['accepted_answers']=json.loads(q['accepted_answers']);correct=transfer.answer_correct(question,selected)
                     cur=db.execute('INSERT INTO attempts(question_id,selected_answer,is_correct,guessed) VALUES (?,?,?,?)',(qid,selected,int(correct),int(guessed)))
                     db.execute('UPDATE attempts SET answered_at=? WHERE id=?',(transfer.now(),cur.lastrowid))
                     db.execute('INSERT INTO attempt_ids VALUES (?,?)',(cur.lastrowid,transfer.uid()))
@@ -254,6 +258,7 @@ class Handler(BaseHTTPRequestHandler):
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--port',type=int,default=8765);p.add_argument('--db',type=Path,default=DB);p.add_argument('--open',action='store_true',help='Open the trainer in your default browser');args=p.parse_args();DB=args.db.resolve()
     initialize_database(DB)
+    initialize_database(MATH_DB,ROOT/'sat-math-clean.db')
     server=ThreadingHTTPServer(('127.0.0.1',args.port),Handler)
     print(f'SAT Trainer running at http://127.0.0.1:{args.port}',flush=True)
     if args.open:threading.Timer(0.5,lambda:webbrowser.open(f'http://127.0.0.1:{args.port}')).start()
