@@ -1,6 +1,8 @@
 *.db
 !sat-clean.db
 !sat-math-clean.db
+!maturita-slovak-clean.db
+!maturita-math-clean.db
 *.db-journal
 *.db-wal
 *.db-shm

@@ -1,11 +1,12 @@
 """Versioned, device-independent bank snapshots. No network or third-party packages."""
-import json, uuid, re
+import json, uuid, re, unicodedata
 from fractions import Fraction
 from datetime import datetime, timezone
 from recover_prompts import clean
 
-FIELDS=('id','domain','skill','difficulty','passage_html','prompt_html','answer_type','correct_answer','accepted_answers','explanation_html','choices')
-LEVELS=('easy','medium','hard')
+FIELDS=('id','domain','skill','difficulty','passage_html','prompt_html','answer_type','correct_answer','accepted_answers','explanation_html','choices','exam_id','year','ordinal','stimulus_id','subcategory','knowledge_source','requires_stimulus','answer_notes')
+LEVELS=('easy','medium','hard','introductory','standard','challenging')
+PERSONAL_LEVELS=('easy','medium','hard')
 def now():return datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00','Z')
 def uid():return str(uuid.uuid4())
 def canonical(x):return json.dumps(x,sort_keys=True,separators=(',',':'),ensure_ascii=False)
@@ -28,6 +29,18 @@ def migrate(db):
         db.execute("UPDATE questions SET accepted_answers=json_array(correct_answer)")
     if 'elapsed_ms' not in {r[1] for r in db.execute('PRAGMA table_info(attempts)')}:
         db.execute('ALTER TABLE attempts ADD COLUMN elapsed_ms INTEGER')
+    db.execute("CREATE TABLE IF NOT EXISTS exams(id TEXT PRIMARY KEY,subject TEXT NOT NULL,year INTEGER NOT NULL,canonical_code TEXT NOT NULL DEFAULT '',level TEXT NOT NULL DEFAULT '',duration_minutes INTEGER,source_url TEXT NOT NULL DEFAULT '',UNIQUE(subject,year,level))")
+    db.execute("CREATE TABLE IF NOT EXISTS stimuli(id TEXT PRIMARY KEY,exam_id TEXT NOT NULL REFERENCES exams(id),ordinal INTEGER NOT NULL,title TEXT NOT NULL DEFAULT '',content_html TEXT NOT NULL DEFAULT '',stimulus_type TEXT NOT NULL DEFAULT '',source_page_start INTEGER,source_page_end INTEGER,UNIQUE(exam_id,ordinal))")
+    additions={
+        'exam_id':'TEXT REFERENCES exams(id)','ordinal':'INTEGER','stimulus_id':'TEXT REFERENCES stimuli(id)',
+        'subcategory':"TEXT NOT NULL DEFAULT ''",'knowledge_source':"TEXT NOT NULL DEFAULT ''",
+        'requires_stimulus':'INTEGER NOT NULL DEFAULT 0','answer_notes':"TEXT NOT NULL DEFAULT ''",
+    }
+    columns={r[1] for r in db.execute('PRAGMA table_info(questions)')}
+    for name,definition in additions.items():
+        if name not in columns:db.execute(f'ALTER TABLE questions ADD COLUMN {name} {definition}')
+    db.execute('CREATE INDEX IF NOT EXISTS idx_questions_exam_order ON questions(exam_id,ordinal)')
+    db.execute('CREATE INDEX IF NOT EXISTS idx_questions_stimulus ON questions(stimulus_id,ordinal)')
     db.execute('INSERT OR IGNORE INTO transfer_meta VALUES (?,?)',('bank_id',uid()))
 
 ELAPSED_LIMIT=7200000
@@ -41,15 +54,23 @@ def elapsed(value):
 
 def numeric(value):
     if not isinstance(value,str):return None
-    value=value.strip().replace('\N{MINUS SIGN}','-')
+    value=value.strip().replace('\N{MINUS SIGN}','-').replace(' ','').replace(',','.')
     if len(value)>30 or not re.fullmatch(r'[+-]?(?:\d+(?:\.\d*)?|\.\d+|\d+/[+-]?\d+)',value):return None
     try:return Fraction(value)
     except (ValueError,ZeroDivisionError):return None
 
+def normalized_text(value):
+    value=unicodedata.normalize('NFKC',str(value)).casefold().strip()
+    return re.sub(r'[^\w]+',' ',value,flags=re.UNICODE).strip()
+
 def answer_correct(question,answer):
-    if question.get('answer_type','choice')=='choice':return answer==question['correct_answer']
-    value=numeric(answer)
-    return value is not None and any(numeric(x)==value for x in question.get('accepted_answers',[]))
+    kind=question.get('answer_type','choice')
+    if kind=='choice':return answer in (question.get('accepted_answers') or [question['correct_answer']])
+    if kind=='numeric':
+        value=numeric(answer)
+        return value is not None and any(numeric(x)==value for x in question.get('accepted_answers',[]))
+    value=normalized_text(answer)
+    return bool(value) and any(normalized_text(x)==value for x in question.get('accepted_answers',[]))
 
 def note_leaves(versions):
     parents={p for v in versions for p in v['parents']}
@@ -82,8 +103,8 @@ def capture(db):
 
 def export_bank(db,name='SAT English'):
     capture(db)
-    result={'format':'sat-bank','version':1,'bank':{'id':db.execute("SELECT value FROM transfer_meta WHERE key='bank_id'").fetchone()[0],'name':name},'questions':[],'attempts':[],'notes':[],'ratings':[],'reviews':[],'tags':[]}
-    for r in db.execute('SELECT q.*,s.name skill,d.name domain FROM questions q JOIN skills s ON s.id=q.skill_id JOIN domains d ON d.id=s.domain_id ORDER BY q.rowid'):
+    result={'format':'sat-bank','version':2,'bank':{'id':db.execute("SELECT value FROM transfer_meta WHERE key='bank_id'").fetchone()[0],'name':name},'exams':[dict(r) for r in db.execute('SELECT * FROM exams ORDER BY subject,year')],'stimuli':[dict(r) for r in db.execute('SELECT * FROM stimuli ORDER BY exam_id,ordinal')],'questions':[],'attempts':[],'notes':[],'ratings':[],'reviews':[],'tags':[]}
+    for r in db.execute('SELECT q.*,s.name skill,d.name domain,e.year FROM questions q JOIN skills s ON s.id=q.skill_id JOIN domains d ON d.id=s.domain_id LEFT JOIN exams e ON e.id=q.exam_id ORDER BY q.rowid'):
         q={k:r[k] for k in FIELDS if k not in ('choices','accepted_answers')}
         q['accepted_answers']=json.loads(r['accepted_answers'])
         q['choices']=[dict(c) for c in db.execute('SELECT letter,content_html FROM choices WHERE question_id=? ORDER BY letter',(q['id'],))]
@@ -98,7 +119,8 @@ def export_bank(db,name='SAT English'):
     return result
 
 def validate(data):
-    if not isinstance(data,dict) or data.get('format')!='sat-bank' or data.get('version')!=1:raise ValueError('Choose a SAT bank transfer file (version 1).')
+    if not isinstance(data,dict) or data.get('format')!='sat-bank' or data.get('version') not in (1,2):raise ValueError('Choose a SAT bank transfer file (version 1 or 2).')
+    data.setdefault('exams',[]);data.setdefault('stimuli',[])
     def text(x,limit=200000):
         if not isinstance(x,str) or len(x)>limit:raise ValueError('Invalid text in transfer file')
         return x
@@ -115,14 +137,17 @@ def validate(data):
         qs[q['id']]=q
         for key in ['domain','skill']:text(q[key],200)
         q.setdefault('answer_type','choice');q.setdefault('accepted_answers',[q.get('correct_answer')])
-        if q['difficulty'] not in LEVELS or q['answer_type'] not in ('choice','numeric'):raise ValueError('Invalid question answer or difficulty')
+        for key,default in [('exam_id',None),('year',None),('ordinal',None),('stimulus_id',None),('subcategory',''),('knowledge_source',''),('requires_stimulus',False),('answer_notes','')]:q.setdefault(key,default)
+        if q['difficulty'] not in LEVELS or q['answer_type'] not in ('choice','numeric','text'):raise ValueError('Invalid question answer or difficulty')
         if q['answer_type']=='numeric':
             if not isinstance(q['accepted_answers'],list) or not q['accepted_answers'] or any(not isinstance(x,str) or not x.strip() or numeric(x) is None for x in q['accepted_answers']):raise ValueError('Invalid question answer')
-        elif q['correct_answer'] not in list('ABCD'):raise ValueError('Invalid question answer')
+        elif q['answer_type']=='text':
+            if not isinstance(q['accepted_answers'],list) or not q['accepted_answers'] or any(not isinstance(x,str) or not x.strip() for x in q['accepted_answers']):raise ValueError('Invalid text answer')
+        elif q['correct_answer'] not in list('ABCDE'):raise ValueError('Invalid question answer')
         for key in ['passage_html','prompt_html','explanation_html']:q[key]=clean(text(q[key]))
         if not q['prompt_html'].strip():raise ValueError('Question prompt is empty')
-        expected=list('ABCD') if q['answer_type']=='choice' else []
-        if not isinstance(q['choices'],list) or sorted(c['letter'] for c in q['choices'])!=expected:raise ValueError('Answer choices do not match the question type')
+        letters=sorted(c['letter'] for c in q['choices']) if isinstance(q.get('choices'),list) else []
+        if (q['answer_type']=='choice' and letters not in (list('ABCD'),list('ABCDE'))) or (q['answer_type']!='choice' and letters):raise ValueError('Answer choices do not match the question type')
         q['choices']=sorted([{'letter':c['letter'],'content_html':clean(text(c['content_html']))} for c in q['choices']],key=lambda c:c['letter'])
         for s in q.get('sources',[]):
             text(s['filename'],250);text(s['file_sha256'],100)
@@ -146,7 +171,7 @@ def validate(data):
             elif key=='notes':
                 text(r['content'],20000)
                 if not isinstance(r['parents'],list):raise ValueError('Invalid note revisions')
-            elif key=='ratings' and r['rating'] not in LEVELS:raise ValueError('Invalid personal difficulty')
+            elif key=='ratings' and r['rating'] not in PERSONAL_LEVELS:raise ValueError('Invalid personal difficulty')
             elif key=='reviews':
                 if r['needs_review'] not in (0,1):raise ValueError('Invalid review state')
                 r['needs_review']=int(r['needs_review'])
@@ -200,10 +225,14 @@ def merge(local,incoming):
 
 def store(db,data):
     migrate(db)
+    for e in data.get('exams',[]):
+        db.execute('INSERT OR IGNORE INTO exams(id,subject,year,canonical_code,level,duration_minutes,source_url) VALUES (?,?,?,?,?,?,?)',tuple(e.get(k) for k in ('id','subject','year','canonical_code','level','duration_minutes','source_url')))
+    for s in data.get('stimuli',[]):
+        db.execute('INSERT OR IGNORE INTO stimuli(id,exam_id,ordinal,title,content_html,stimulus_type,source_page_start,source_page_end) VALUES (?,?,?,?,?,?,?,?)',tuple(s.get(k) for k in ('id','exam_id','ordinal','title','content_html','stimulus_type','source_page_start','source_page_end')))
     for q in data['questions']:
         db.execute('INSERT OR IGNORE INTO domains(name) VALUES (?)',(q['domain'],));did=db.execute('SELECT id FROM domains WHERE name=?',(q['domain'],)).fetchone()[0]
         db.execute('INSERT OR IGNORE INTO skills(domain_id,name) VALUES (?,?)',(did,q['skill']));sid=db.execute('SELECT id FROM skills WHERE domain_id=? AND name=?',(did,q['skill'])).fetchone()[0]
-        db.execute('INSERT OR IGNORE INTO questions(id,skill_id,difficulty,passage_html,prompt_html,answer_type,correct_answer,accepted_answers,explanation_html) VALUES (?,?,?,?,?,?,?,?,?)',(q['id'],sid,q['difficulty'],q['passage_html'],q['prompt_html'],q['answer_type'],q['correct_answer'],canonical(q['accepted_answers']),q['explanation_html']))
+        db.execute('INSERT OR IGNORE INTO questions(id,skill_id,difficulty,passage_html,prompt_html,answer_type,correct_answer,accepted_answers,explanation_html,exam_id,ordinal,stimulus_id,subcategory,knowledge_source,requires_stimulus,answer_notes) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(q['id'],sid,q['difficulty'],q['passage_html'],q['prompt_html'],q['answer_type'],q['correct_answer'],canonical(q['accepted_answers']),q['explanation_html'],q.get('exam_id'),q.get('ordinal'),q.get('stimulus_id'),q.get('subcategory',''),q.get('knowledge_source',''),int(bool(q.get('requires_stimulus'))),q.get('answer_notes','')))
         for c in q['choices']:db.execute('INSERT OR IGNORE INTO choices VALUES (?,?,?)',(q['id'],c['letter'],c['content_html']))
         for s in q.get('sources',[]):
             db.execute('INSERT OR IGNORE INTO sources(filename,file_sha256) VALUES (?,?)',(s['filename'],s['file_sha256']));sid=db.execute('SELECT id FROM sources WHERE file_sha256=?',(s['file_sha256'],)).fetchone()[0]

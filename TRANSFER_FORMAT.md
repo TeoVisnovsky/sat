@@ -1,10 +1,12 @@
-# SAT bank transfer v1
+# Study bank transfer v2
 
-The UTF-8 JSON envelope has `format: "sat-bank"`, `version: 1`, a `bank` object (`id`, `name`), and six arrays. Exports are complete snapshots, not deltas. Unsupported versions are rejected.
+The UTF-8 JSON envelope retains `format: "sat-bank"` for backward compatibility, uses `version: 2`, and has a `bank` object (`id`, `name`) plus eight arrays. Exports are complete snapshots, not deltas. Version 1 imports remain supported and receive empty exam metadata.
 
 | Array | Record fields |
 | --- | --- |
-| `questions` | `id`, `domain`, `skill`, `difficulty`, `passage_html`, `prompt_html`, `correct_answer`, `explanation_html`, `choices` (`letter`, `content_html`), `sources` (`filename`, `file_sha256`, `page_start`, `page_end`) |
+| `exams` | `id`, `subject`, `year`, `canonical_code`, `level`, `duration_minutes`, `source_url` |
+| `stimuli` | shared passage `id`, `exam_id`, `ordinal`, `title`, `content_html`, `stimulus_type`, source pages |
+| `questions` | original fields plus `answer_type` (`choice`, `numeric`, `text`), `accepted_answers`, `exam_id`, `year`, `ordinal`, `stimulus_id`, `subcategory`, `knowledge_source`, `requires_stimulus`, `answer_notes`; choices may be A-D or A-E |
 | `attempts` | globally unique `id`, `question_id`, `selected_answer`, `is_correct` (0/1), `guessed` (0/1), `elapsed_ms` (integer milliseconds or `null`), `answered_at` |
 | `notes` | globally unique `id`, `question_id`, `content`, `updated_at`, `parents` (superseded note revision IDs) |
 | `ratings` | `id`, `question_id`, `rating` (easy/medium/hard), `updated_at` |
@@ -15,7 +17,7 @@ New event IDs are UUIDs. Timestamps are UTC ISO 8601 with millisecond precision.
 
 Python stores the original relational tables plus `attempt_ids`, `note_versions`, `state_versions`, and `transfer_meta`. Older banks are upgraded without deleting any questions or progress. Legacy attempts get deterministic IDs based on the original row, including its local ID and timestamp, so identical old backups can be deduplicated. Legacy records independently reconstructed with changed IDs/timestamps cannot be reliably recognized as identical. New UUID records do not have that ambiguity.
 
-Phone storage is IndexedDB `sat-offline-v1`, object store `banks`. Each bank snapshot is saved in one transaction, including all state produced by Check. Read/write transactions serialize edits from multiple tabs. The service worker caches application files and the clean initial bank, never personal progress.
+Phone storage is IndexedDB `sat-offline-v1`, object store `banks`. Each bank snapshot is saved in one transaction, including all state produced by Check. Read/write transactions serialize edits from multiple tabs. The service worker caches application files, four clean initial banks and their source-faithful Maturita crops, never personal progress.
 
 ## Merge contract
 
@@ -29,10 +31,10 @@ Ratings and review state use maximum `(updated_at, id)` per question. Attempt or
 
 Merge does not remove questions or attempts. There is no automatic relationship between two independently added banks; the user chooses the destination. Device clocks must be reasonably correct for timestamps to reflect edit order.
 
-## Future online sync
+## Online sync
 
-The UI calls a storage adapter (`api` / `SATOffline.request`). File import/export is the transport today. A future authenticated backend can accept the same versioned snapshot, apply the same merge contract, and return the merged result. Each device can push/pull at different times; neither needs to connect to the other.
+The UI calls a storage adapter (`api` / `SATOffline.request`). File import/export and the authenticated Supabase backend use the same versioned snapshots and merge contract. Each device can push/pull at different times; neither needs to connect to the other.
 
-Accounts, server authorization, conflict review for differing question versions, delta cursors, deletion tombstones, and a Sync button are future work. Do not add cloud uploads to the service worker or alter the v1 merge semantics silently. Breaking format changes require a new version and migration. Cross-runtime tests compare the Python and JavaScript merge results.
+Supabase row-level security keeps each account's banks private. Differing question versions are rejected atomically. Tag-deletion tombstones and fine-grained deltas remain future work. Breaking changes require another version and migration. Cross-runtime tests compare the Python and JavaScript merge results.
 
-Only the clean seed is published. Raw SQLite backups additionally retain PC-specific provenance and original PDF asset paths; portable files contain the content necessary for practice plus PDF source references, not the optional original image files or all SQLite administration fields.
+Only clean seeds are suitable for publishing. Raw SQLite backups additionally retain PC-specific provenance. Portable question HTML references the published optimized Maturita crops; original PDFs remain local and excluded from Git.

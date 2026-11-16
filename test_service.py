@@ -8,17 +8,18 @@ class TrainerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp=tempfile.TemporaryDirectory();cls.path=Path(cls.tmp.name)/'test.db'
-        server.BANKS=Path(cls.tmp.name)/'banks';cls.old_math=server.MATH_DB;server.MATH_DB=Path(cls.tmp.name)/'math.db'
+        server.BANKS=Path(cls.tmp.name)/'banks';cls.old_math=server.MATH_DB;server.MATH_DB=Path(cls.tmp.name)/'math.db';cls.old_slovak=server.MATURITA_SLOVAK_DB;server.MATURITA_SLOVAK_DB=Path(cls.tmp.name)/'slovak.db'
         src=sqlite3.connect(server.ROOT/'sat-clean.db');dst=sqlite3.connect(cls.path);src.backup(dst);src.close()
         dst.executescript((server.ROOT/'schema.sql').read_text())
         for table in ['attempts','notes','review_state','question_tags','tags','personal_difficulty']:dst.execute('DELETE FROM '+table)
         dst.commit();dst.close()
         src=sqlite3.connect(server.ROOT/'sat-math-clean.db');dst=sqlite3.connect(server.MATH_DB);src.backup(dst);src.close();dst.close();server.DB=cls.path
+        src=sqlite3.connect(server.ROOT/'maturita-slovak-clean.db');dst=sqlite3.connect(server.MATURITA_SLOVAK_DB);src.backup(dst);src.close();dst.close()
         cls.http=server.ThreadingHTTPServer(('127.0.0.1',0),server.Handler)
         cls.thread=threading.Thread(target=cls.http.serve_forever,daemon=True);cls.thread.start()
         cls.base='http://127.0.0.1:'+str(cls.http.server_port)
     @classmethod
-    def tearDownClass(cls):cls.http.shutdown();cls.http.server_close();server.MATH_DB=cls.old_math;cls.tmp.cleanup()
+    def tearDownClass(cls):cls.http.shutdown();cls.http.server_close();server.MATH_DB=cls.old_math;server.MATURITA_SLOVAK_DB=cls.old_slovak;cls.tmp.cleanup()
     def request(self,path,data=None,headers=None):
         h={'Content-Type':'application/json'};h.update(headers or {})
         req=urllib.request.Request(self.base+path,data=None if data is None else json.dumps(data).encode(),headers=h)
@@ -87,6 +88,14 @@ class TrainerTests(unittest.TestCase):
         code,raw=self.request('/api/attempt',{'question_id':qid,'answer':answer,'guessed':False},{'X-SAT-Bank':'math'});self.assertEqual(code,200,raw);self.assertTrue(json.loads(raw)['is_correct'])
         code,raw=self.request('/api/attempt',{'question_id':qid,'answer':'2+2','guessed':False},{'X-SAT-Bank':'math'});self.assertEqual(code,400,raw)
 
+    def test_maturita_year_and_section_filters(self):
+        meta=self.get('meta?bank=maturita-slovak');self.assertTrue(meta['is_maturita']);self.assertTrue(meta['is_slovak'])
+        questions=self.get('questions?bank=maturita-slovak&year=2009&section=3')
+        self.assertEqual(len(questions),8)
+        self.assertEqual([q['ordinal'] for q in questions],list(range(17,25)))
+        self.assertTrue(all(q['year']==2009 for q in questions))
+        self.assertEqual(self.request('/api/questions?bank=maturita-slovak&section=9')[0],400)
+
     def test_attempt_records_question_time(self):
         """Runs against the Math bank so the shared English bank stays untouched."""
         math={'X-SAT-Bank':'math'}
@@ -123,6 +132,6 @@ class TrainerTests(unittest.TestCase):
         req=urllib.request.Request(self.base+'/api/banks/import',data=b'not a database',headers={'Content-Type':'application/octet-stream'})
         with self.assertRaises(urllib.error.HTTPError) as error:urllib.request.urlopen(req)
         self.assertEqual(error.exception.code,400)
-        self.assertEqual(len(self.get('banks')),3)
+        self.assertEqual(len(self.get('banks')),5)
 
 if __name__=='__main__':unittest.main(verbosity=2)

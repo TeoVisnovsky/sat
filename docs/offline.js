@@ -6,7 +6,7 @@ window.SATOffline=(function(){
  const belongs=r=>(r.owner||'guest')===owner;
  const changed=()=>window.dispatchEvent(new Event('sat-local-change'));
  function touch(r){r.generation=(r.generation||0)+1;return r;}
- function makeRecord(id,name,data){data.bank.id=id;return {key:storageKey(id),id,owner,name,data,generation:1,syncedGeneration:0};}
+ function makeRecord(id,name,data,seedRevision){data.bank.id=id;return {key:storageKey(id),id,owner,name,data,generation:1,syncedGeneration:0,seedRevision};}
  const open=new Promise((resolve,reject)=>{const r=indexedDB.open('sat-offline-v1',1);r.onupgradeneeded=()=>r.result.createObjectStore('banks',{keyPath:'key'});r.onsuccess=()=>{database=r.result;resolve();};r.onerror=()=>reject(Error('Local storage is unavailable. Open in a normal browser tab, outside private browsing.'));});
  async function transaction(key,write,fn){
   await open;
@@ -17,17 +17,23 @@ window.SATOffline=(function(){
   });
  }
  const ready=(async()=>{
-  for(const seed of [{id:'main',file:'seed.json',name:'SAT English · original bank'},{id:'math',file:'math-seed.json',name:'SAT Math · original bank'}]){
-   if(await transaction(storageKey(seed.id),true,(r,store)=>{if(!r)return false;const before=SATCore.canonical(r.data);SATCore.validate(r.data);if(SATCore.canonical(r.data)!==before)store.put(touch(r));return true;}))continue;
-   const response=await fetch('./'+seed.file);if(!response.ok)throw Error('Connect once to download both question banks.');const data=SATCore.validate(await response.json());
-   await transaction(storageKey(seed.id),true,(existing,store)=>{if(!existing)store.put(makeRecord(seed.id,seed.name,data));});
+  for(const seed of [{id:'main',file:'seed.json',name:'SAT English · original bank',revision:'sat-en-v2'},{id:'math',file:'math-seed.json',name:'SAT Math · original bank',revision:'sat-math-v2'},{id:'maturita-slovak',file:'maturita-slovak-seed.json',name:'Maturita · Slovenský jazyk a literatúra',revision:'maturita-slovak-v3'},{id:'maturita-math',file:'maturita-math-seed.json',name:'Maturita · Matematika',revision:'maturita-math-v2'}]){
+   if(await transaction(storageKey(seed.id),true,(r,store)=>{if(!r)return false;const before=SATCore.canonical(r.data);SATCore.validate(r.data);if(SATCore.canonical(r.data)!==before)store.put(touch(r));return r.seedRevision===seed.revision;}))continue;
+   const response=await fetch('./'+seed.file);if(!response.ok)throw Error('Connect once to download all question banks.');const data=SATCore.validate(await response.json());
+   await transaction(storageKey(seed.id),true,(existing,store)=>{
+    if(!existing){store.put(makeRecord(seed.id,seed.name,data,seed.revision));return;}
+    const ids=new Set(data.questions.map(q=>q.id)),questions=new Map(data.questions.map(q=>[q.id,q]));
+    data.attempts=existing.data.attempts.filter(r=>ids.has(r.question_id)).map(r=>({...r,is_correct:+SATCore.answerCorrect(questions.get(r.question_id),r.selected_answer)}));
+    for(const key of ['notes','ratings','reviews','tags'])data[key]=existing.data[key].filter(r=>ids.has(r.question_id));
+    existing.data=SATCore.validate(data);existing.seedRevision=seed.revision;store.put(touch(existing));
+   });
   }
  })();
  async function request(bank,path,body){await ready;if(path==='banks')return transaction(null,false,rs=>rs.filter(belongs).map(r=>({id:r.id||r.key,name:r.name})));const result=await transaction(storageKey(bank),body!==undefined,(r,store)=>{if(!r||!belongs(r))throw Error('Database not found. Choose another database.');const result=SATCore.request(r.data,path,body);if(body!==undefined)store.put(touch(r));return result;});if(body!==undefined)changed();return result;}
  async function importFile(bank,file,mode){
   await ready;if(file.size>50*1024*1024)throw Error('Choose a transfer file under 50 MB');
   let incoming;try{incoming=SATCore.validate(JSON.parse(await file.text()));}catch(e){if(/\.db$|\.sqlite3?$/i.test(file.name))throw Error('On your PC, use Export to turn this SQLite database into a transfer file.');throw e;}
-  if(mode==='add'){const key=SATCore.uid();const result=await transaction(storageKey(key),true,(_,store)=>{store.add(makeRecord(key,incoming.bank.name,incoming));return {id:key};});changed();return result;}
+  if(mode==='add'){const key=SATCore.uid();const result=await transaction(storageKey(key),true,(_,store)=>{store.add(makeRecord(key,incoming.bank.name,incoming,null));return {id:key};});changed();return result;}
   if(mode!=='merge')throw Error('Choose add or merge');
   const result=await transaction(storageKey(bank),true,(r,store)=>{if(!r||!belongs(r))throw Error('Database not found');const merged=SATCore.merge(r.data,incoming);r.data=merged.data;store.put(touch(r));const {data,...report}=merged;return {id:bank,...report};});changed();return result;
  }
@@ -35,7 +41,7 @@ window.SATOffline=(function(){
  async function record(id){await ready;return transaction(storageKey(id),false,r=>{if(r&&!belongs(r))throw Error('Account changed');return r;});}
  async function applyRemote(id,data){
   await ready;return transaction(storageKey(id),true,(r,store)=>{
-   if(!r){r=makeRecord(id,data.bank.name,data);store.add(r);return r;}
+   if(!r){r=makeRecord(id,data.bank.name,data,null);store.add(r);return r;}
    if(!belongs(r))throw Error('Account changed');
    const merged=SATCore.merge(r.data,data).data;merged.bank.id=id;
    if(SATCore.canonical(merged)!==SATCore.canonical(r.data)){r.data=merged;store.put(touch(r));}

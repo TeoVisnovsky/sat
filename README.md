@@ -1,10 +1,10 @@
-# SAT Trainer
+# SAT and Maturita Trainer
 
-A minimal SAT practice app with two separate question banks — **753 Reading & Writing questions** and **536 Math questions** — with answers, explanations, charts, and saved progress. Use the same offline web app on your PC and phone. Sign in with Google to sync your own progress automatically, or practice without an account on one device. Friends can use their own Google accounts and get independent progress. No Python or Codex installation is needed for the website.
+A minimal practice app with four separate banks: **753 SAT Reading & Writing**, **536 SAT Math**, **1,088 Slovak Maturita language and literature**, and **510 Slovak Maturita mathematics** questions. It includes official answers, source-faithful diagrams and passages, filters, notes, personal difficulty, progress, offline use, and private Google-account sync.
 
 ## Start on PC or phone
 
-Open **[SAT Trainer](https://teovisnovsky.github.io/sat/)** and choose **Account → Sign in with Google** on each device. Switch between the English and Math banks with the **English / Math** buttons in the header. Each bank keeps its own questions, attempts, notes, ratings, tags and progress. Use the same Google account for your own devices. Answers, notes, difficulty ratings and question banks save locally first and sync when the app is open and connected. The header shows **Synced**, **Changes waiting**, or an offline/retry status; click it to retry and open **Account** for details.
+Open **[the trainer](https://teovisnovsky.github.io/sat/)** and choose **Account → Sign in with Google** on each device. Switch among the four banks from the compact header switcher. Each bank keeps its own questions, attempts, notes, ratings, tags and progress. Use the same Google account for your own devices. Answers, notes, difficulty ratings and question banks save locally first and sync when the app is open and connected. The header shows **Synced**, **Changes waiting**, or an offline/retry status; click it to retry and open **Account** for details.
 
 On PC, bookmark the site, use the browser's install option, or double-click **Start SAT Web.url** from the download. You no longer need to keep a local server running. The original Python service remains available below as a separate offline option.
 
@@ -19,7 +19,7 @@ Sync does not need both devices online at once. Open the first device online unt
 3. Open the app from its home-screen icon while still connected. In **Databases**, wait for **Ready offline · saved on this device**.
 4. You can now turn on airplane mode, close and reopen the app, and practice. Your PC can be switched off.
 
-The phone downloads all question text, answers, explanations and inline charts. It saves your banks, attempts, notes, tags and ratings on the phone. When signed in, your study data also syncs to your private account in Supabase. Without sign-in it stays on that device. There is no running Python service on the phone.
+The phone downloads all four banks, including the optimized Maturita source crops needed for formulas, diagrams, tables, poetry and underlined text. It saves your banks, attempts, notes, tags and ratings on the phone. When signed in, your study data also syncs to your private account in Supabase. Without sign-in it stays on that device. There is no running Python service on the phone.
 
 Use the same installed app each time. A different browser, website address or home-screen installation can have separate storage. Keep **Export** backups in Files/Downloads: clearing browser data, removing the app, or the phone reclaiming storage can remove local data. Opening **Install / offline help** requests persistent storage where supported, but exports remain the reliable backup.
 
@@ -76,8 +76,11 @@ Keep the terminal open while practicing. Press **Ctrl+C** to stop the server. No
 
 ## How to practice
 
-- Filter by category, skill, official difficulty, progress, personal difficulty, or tag. Search by question ID or passage text.
+- Filter SAT questions by category, skill, official difficulty, progress, personal difficulty, or tag. Search by question ID or passage text. Estimated official difficulty is deliberately absent from both Maturita banks.
+- Maturita banks add year, answer-format and passage-use filters. Slovak also has eight section filters, one for each official block of eight questions. Slovak questions remain grouped by passage and official order by default, but category filters may select only matching questions; you can also practise only passage-free questions or shuffle every match.
+- **Timers → Start a full test** selects one official year in its original order. Maturita SJL uses 100 minutes for 64 questions; Maturita Math uses 150 minutes for 30 questions. During a full test, answers are only marked as answered/not answered and no grading is revealed. **Submit test** saves and grades the answers together, then opens review mode with the correct answers.
 - Multiple-choice questions: select A, B, C, or D. You can change your selection freely; the A-D keys also work.
+- Maturita Math choice questions use A–E. Slovak short answers are checked against accepted forms from the official rubric; if a spelling-tolerant official answer is rejected too strictly, use **My answer should count as correct**.
 - Math student-produced responses: type a number, decimal, or fraction and press Enter or **Check**. Equivalent forms are accepted, so `18/11`, `36/22` and `1.636` all count for the same answer. Only digits, a sign, one decimal point, or one fraction bar are accepted.
 - Optionally tick **I am unsure / guessing**, then click **Check**. Only Check records an attempt and reveals the answer.
 - The header stopwatch times each question. The bar fills toward your pace target and the figure beside it counts down to that target, then turns red and counts up once you pass it. Press the stopwatch to pause it if you have to step away; it also pauses by itself when you switch tabs, and a reload keeps it running. While it is paused, press the figure beside the time to start the question again from 0:00. Each answer saves its own time, so a second attempt at the same question is timed separately.
@@ -88,14 +91,16 @@ Keep the terminal open while practicing. Press **Ctrl+C** to stop the server. No
 - Wrong and guessed answers enter review. A confident correct retry removes a question from review; you can also mark questions manually.
 - **Progress** shows unique questions completed, first-attempt accuracy, and your average time per question overall and per skill. Retrying never inflates completion or erases earlier attempts.
 
+Maturita feedback shows only the broad category, skill and (for Slovak) section. Detailed source labels, estimated difficulty and method-like tags are omitted so they cannot hint at a solution or clutter review.
+
 The web app saves on each device and syncs to the signed-in account. Each friend has independent progress. The optional Python service saves only to its local SQLite database; it does not participate in cloud sync.
 
 ## Databases and starting fresh
 
-Open the **Databases** menu in the header to **Export this database**, **Import / merge**, or pick an imported bank. The **English / Math** buttons beside it switch between the two built-in banks.
+Open the **Databases** menu in the header to switch among the four built-in banks, **Export this database**, or **Import / merge** another one.
 
-- `sat-clean.db` / `sat-math-clean.db`: the included templates with all 753 English and 536 Math questions and no attempts, notes, review flags, personal tags, or difficulty ratings.
-- `sat.db` and `sat-math.db`: your original working banks, created automatically on first launch.
+- `sat-clean.db`, `sat-math-clean.db`, `maturita-slovak-clean.db`, and `maturita-math-clean.db`: clean templates with no attempts, notes, review flags, personal tags, or personal difficulty ratings.
+- `sat.db`, `sat-math.db`, `maturita-slovak.db`, and `maturita-math.db`: working banks created automatically on first launch.
 - `databases/`: your imported working banks.
 
 To start a separate fresh run on PC, import `sat-clean.db` and choose **Add as separate database**. For either device, the download also contains `docs/seed.json` and `docs/math-seed.json`, clean portable banks with the same 753 English and 536 Math questions. Import either file as a separate database. Your existing history stays in its original bank; the template stays clean.
@@ -139,6 +144,16 @@ Formulas are stored as MathML and graphs as inline SVG, so both scale with the p
 
 Question content belongs to College Board. This is an unofficial practice tool, not affiliated with or endorsed by College Board.
 
+### Slovak Maturita
+
+One canonical test form is included for each available year from 2008 through 2026: 2008–2019 and 2022–2026. The written/external exams are absent for 2020 and 2021. For the exceptional 2008 A/B papers, level A is used. Parallel shuffled test codes are not duplicated.
+
+The SJL bank contains 17 tests, 1,088 questions and 136 shared passage sections: 680 A–D questions and 408 short answers. Its visible Slovak taxonomy uses three broad categories — **Porozumenie a interpretácia textu**, **Jazyk**, and **Literatúra** — and four shared skill groups. Each test is additionally filterable as eight official sections of eight questions.
+
+The Maturita Math bank contains 17 tests and 510 questions: 340 numeric responses and 170 A–E questions. It uses four broad categories and four general skill groups; method-level tags that could reveal a solution are not shown before submission.
+
+Source PDFs stay under `sources/maturita/` and are ignored by Git. `scripts/download_maturita_archive.py` recreates the local archive, and `scripts/import_maturita.py` reproducibly rebuilds the two clean banks and optimized WebP source crops. Before publicly redistributing the derived banks, confirm that the archive publisher's consent and reuse terms cover that distribution.
+
 ## Development
 
 Python 3.10+ standard library, SQLite, and plain HTML/CSS/JavaScript. The web app uses IndexedDB, a service worker, and a locally bundled Supabase JavaScript SDK. See [Supabase setup](supabase/README.md) for Google login, redirect URLs, access rules and verification. `schema.sql` documents the PC database; [TRANSFER_FORMAT.md](TRANSFER_FORMAT.md) documents the portable format and future sync boundary.
@@ -154,7 +169,7 @@ python build_phone.py
 
 Tests use disposable copies and leave your study history untouched. Node 22+ is needed for development tests and refreshing the vendored SDK (`npm run vendor`), not to use the app. The SDK is included in the repository so Python alone can rebuild the website.
 
-`build_phone.py` generates `docs/` from `web/` and **sat-clean.db and sat-math-clean.db only**, and refuses to build if either template contains personal progress. Commit the generated files after changing the shared UI. GitHub Pages serves **main → /docs**. You can also serve that directory from another HTTPS static host. Preview it locally at `http://127.0.0.1:8765/phone/`; this preview has separate browser storage from the PC database and the public phone URL.
+`build_phone.py` generates `docs/` from `web/` and the four clean banks only, and refuses to build if any template contains personal progress. It also copies and precaches the Maturita WebP source crops. Commit the generated files after changing the shared UI. GitHub Pages serves **main → /docs**. You can also serve that directory from another HTTPS static host. Preview it locally at `http://127.0.0.1:8765/phone/`; this preview has separate browser storage from the PC database and the public phone URL.
 
 ### Optional PDF rebuild
 
@@ -165,6 +180,8 @@ python -m pip install -r requirements.txt
 python import_pdfs.py
 python recover_prompts.py
 python import_math.py
+python scripts/download_maturita_archive.py
+python scripts/import_maturita.py
 ```
 
 Run both steps. Recovery needs internet unless official responses are cached in `source-cache/`. Source PDFs and that cache are not required for practice and are not distributed in this repository. Reimporting preserves attempts, notes, tags, and ratings. Import reports contain the validation results.
