@@ -64,7 +64,7 @@ function renderQuestion(){
  const passage=q.passage_html?(q.requires_stimulus?`<div class="passage-text">${SATCore.html(q.passage_html)}</div>`:`<details class="optional-passage" open><summary>Source passage · optional for this question</summary><div class="passage-text">${SATCore.html(q.passage_html)}</div></details>`):'';
  const examEntry=testEntry(q.id),reviewing=fullTest?.status==='review',testing=activeTest();
  $('workspace').classList.toggle('test-review',reviewing);
- $('workspace').innerHTML=`${inTest()?`<div class="test-question-bar"><div><strong>${testing?'Full test in progress':'Submitted test review'}</strong><span id="testQuestionProgress">${testing?`${Object.values(fullTest.answers||{}).filter(entry=>entry.answer).length} of ${questions.length} answered`:`${fullTest.score} of ${fullTest.answered} correct`}</span></div><button id="testQuestionAction" class="${testing?'primary':''}">${testing?'Finish and submit':'Exit review'}</button></div>`:''}<div class="question-top"><span>${pos>=0?`${pos+1} of ${questions.length} · `:''}${meta.is_maturita?`${q.year} · Question ${q.ordinal}`:q.id}</span><div class="question-actions"><button id="copyLink">Copy link</button><button id="reviewToggle" ${inTest()?'hidden':''}>${q.needs_review?'✓ In review':'Mark for review'}</button></div></div>
+ $('workspace').innerHTML=`<div class="question-top"><span>${pos>=0?`${pos+1} of ${questions.length} · `:''}${meta.is_maturita?`${q.year} · Question ${q.ordinal}`:q.id}</span><div class="question-actions"><button id="copyLink">Copy link</button><button id="reviewToggle" ${inTest()?'hidden':''}>${q.needs_review?'✓ In review':'Mark for review'}</button></div></div>
  ${metadata}<span class="badge" id="stateBadge">${stateLabel(q)}</span>
  ${passage}
  <details class="transcript" ${q.assets.length?'':'hidden'}><summary>Original PDF passage</summary>${q.assets.map(a=>`<img class="passage-image" src="/${esc(a.file_path)}" alt="${esc(a.alt_text)}">`).join('')}</details>
@@ -88,7 +88,6 @@ function renderQuestion(){
  }
  $('copyLink').onclick=safe(async()=>{await navigator.clipboard.writeText(location.href);toast('Question link copied');});
  $('nextQuestion').onclick=safe(nextQuestion);
- if(inTest())$('testQuestionAction').onclick=testing?openSubmitDialog:safe(exitTestReview);
  if(examEntry?.answer){selectedAnswer=examEntry.answer;$('guessed').checked=!!examEntry.guessed;if(q.answer_type==='choice')$('workspace').querySelectorAll('.choice').forEach(b=>{const selected=b.dataset.letter===selectedAnswer;b.classList.toggle('selected',selected);b.setAttribute('aria-pressed',String(selected));});else $('numericAnswer').value=selectedAnswer;if(testing)$('checkAnswer').disabled=false;}
  if(reviewing)showTestResult(q,fullTest.results?.[q.id]);
 }
