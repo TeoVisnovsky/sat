@@ -4,7 +4,7 @@ A minimal practice app with four separate banks: **753 SAT Reading & Writing**, 
 
 ## Start on PC or phone
 
-Open **[the trainer](https://teovisnovsky.github.io/sat/)** and choose **Account → Sign in with Google** on each device. Switch among the four banks from the compact header switcher. Each bank keeps its own questions, attempts, notes, ratings, tags and progress. Use the same Google account for your own devices. Answers, notes, difficulty ratings and question banks save locally first and sync when the app is open and connected. The header shows **Synced**, **Changes waiting**, or an offline/retry status; click it to retry and open **Account** for details.
+Open **[the trainer](https://teovisnovsky.github.io/sat/)** and choose **Account → Sign in with Google** on each device. The current question bank is the selector at the left of the header. Each bank keeps its own questions, attempts, notes, ratings, full-test history and progress. Use the same Google account for your own devices. Answers, notes, difficulty ratings and question banks save locally first and sync when the app is open and connected. The header shows **Synced**, **Changes waiting**, or an offline/retry status; click it to retry and open **Account** for details.
 
 On PC, bookmark the site, use the browser's install option, or double-click **Start SAT Web.url** from the download. You no longer need to keep a local server running. The original Python service remains available below as a separate offline option.
 
@@ -15,11 +15,11 @@ Sync does not need both devices online at once. Open the first device online unt
 ## Install for offline practice
 
 1. Open **[SAT English](https://teovisnovsky.github.io/sat/)** on your phone while connected to the internet.
-2. **iPhone:** use Safari → Share → **Add to Home Screen**. **Android:** use Chrome → menu → **Install app / Add to Home screen**. There is also an install/help button inside **Databases**.
-3. Open the app from its home-screen icon while still connected. In **Databases**, wait for **Ready offline · saved on this device**.
+2. **iPhone:** use Safari → Share → **Add to Home Screen**. **Android:** use Chrome → menu → **Install app / Add to Home screen**. There is also an install/help button inside **Data**.
+3. Open the app from its home-screen icon while still connected. Open each bank you want to use, then choose **Data → Download this bank for offline use**. Wait for **Offline pack ready** before disconnecting.
 4. You can now turn on airplane mode, close and reopen the app, and practice. Your PC can be switched off.
 
-The phone downloads all four banks, including the optimized Maturita source crops needed for formulas, diagrams, tables, poetry and underlined text. It saves your banks, attempts, notes, tags and ratings on the phone. When signed in, your study data also syncs to your private account in Supabase. Without sign-in it stays on that device. There is no running Python service on the phone.
+The phone initially downloads only the bank you open. Optional offline packs include that bank's optimized Maturita source crops needed for formulas, diagrams, tables, poetry and underlined text. This keeps installation and updates smaller. It saves your banks, attempts, notes, tags, ratings and full-test history on the phone. When signed in, your study data also syncs to your private account in Supabase. Without sign-in it stays on that device. There is no running Python service on the phone.
 
 Use the same installed app each time. A different browser, website address or home-screen installation can have separate storage. Keep **Export** backups in Files/Downloads: clearing browser data, removing the app, or the phone reclaiming storage can remove local data. Opening **Install / offline help** requests persistent storage where supported, but exports remain the reliable backup.
 
@@ -27,7 +27,7 @@ Use the same installed app each time. A different browser, website address or ho
 
 1. On the device you studied on, choose the database and click **Export**.
 2. Move the downloaded `sat-YYYY-MM-DD.satbank.json` file to the other device using a cable, AirDrop, Quick Share, or your usual file-transfer method. On a phone, save it to Files/Downloads first if necessary.
-3. On the other device, select the destination database, open **Databases → Import / merge**, and choose that file.
+3. On the other device, select the destination database, open **Data → Import or merge**, and choose that file.
 4. Choose **Merge into this database** to combine them, or **Add as separate database** to keep an independent copy.
 5. To bring both devices up to date, export the merged bank and merge it back into the first device.
 
@@ -78,13 +78,13 @@ Keep the terminal open while practicing. Press **Ctrl+C** to stop the server. No
 
 - Filter SAT questions by category, skill, official difficulty, progress, personal difficulty, or tag. Search by question ID or passage text. Estimated official difficulty is deliberately absent from both Maturita banks.
 - Maturita banks add year, answer-format and passage-use filters. Slovak also has eight section filters, one for each official block of eight questions. Slovak questions remain grouped by passage and official order by default, but category filters may select only matching questions; you can also practise only passage-free questions or shuffle every match.
-- **Timers → Start a full test** selects one official year in its original order. Maturita SJL uses 100 minutes for 64 questions; Maturita Math uses 150 minutes for 30 questions. During a full test, answers are only marked as answered/not answered and no grading is revealed. **Submit test** saves and grades the answers together, then opens review mode with the correct answers.
+- **Test → Set up full test** selects one official year in its original order. Maturita SJL uses 100 minutes for 64 questions; Maturita Math uses 150 minutes for 30 questions. During a full test, the navigator shows answered, unanswered and flagged questions, but no grading. Submission is atomic, so a failed request cannot record only part of a test. The results page shows score out of all questions, blanks, time and section/category breakdown; completed tests appear under **Progress**.
 - Multiple-choice questions: select A, B, C, or D. You can change your selection freely; the A-D keys also work.
 - Maturita Math choice questions use A–E. Slovak short answers are checked against accepted forms from the official rubric; if a spelling-tolerant official answer is rejected too strictly, use **My answer should count as correct**.
 - Math student-produced responses: type a number, decimal, or fraction and press Enter or **Check**. Equivalent forms are accepted, so `18/11`, `36/22` and `1.636` all count for the same answer. Only digits, a sign, one decimal point, or one fraction bar are accepted.
 - Optionally tick **I am unsure / guessing**, then click **Check**. Only Check records an attempt and reveals the answer.
 - The header stopwatch times each question. The bar fills toward your pace target and the figure beside it counts down to that target, then turns red and counts up once you pass it. Press the stopwatch to pause it if you have to step away; it also pauses by itself when you switch tabs, and a reload keeps it running. While it is paused, press the figure beside the time to start the question again from 0:00. Each answer saves its own time, so a second attempt at the same question is timed separately.
-- **Timers** sets the pace target to any number of minutes for any number of questions; that one figure drives both the bar and the countdown. It starts at a full section for the open bank — English 64 min for 54 questions (1:11 each), Math 70 min for 44 questions (1:35 each). The set timer runs across questions, counting up or counting down against the target for an exam-style run, and reports elapsed time, questions answered and average pace.
+- **Timer** sets the pace target to any number of minutes for any number of questions; that one figure drives both the bar and the countdown. It starts at a full section for the open bank — English 64 min for 54 questions (1:11 each), Math 70 min for 44 questions (1:35 each). The set timer runs across questions, counting up or counting down against the target, and reports elapsed time, questions answered and average pace.
 - Rate **How did this feel?** as Easy, Medium, or Hard. **My difficulty** filters use your latest rating, independently of the official difficulty.
 - Notes stay hidden when you open a question. Check an answer to reveal them, or choose **Show notes without answering** to review without recording an attempt. Notes autosave; **Save now** saves immediately.
 - Enter personal tags separated by commas, then click **Save tags**.
@@ -97,7 +97,7 @@ The web app saves on each device and syncs to the signed-in account. Each friend
 
 ## Databases and starting fresh
 
-Open the **Databases** menu in the header to switch among the four built-in banks, **Export this database**, or **Import / merge** another one.
+Use the current-bank selector at the left of the header to switch among the four built-in banks. Open **Data** to export, import/merge, create an offline pack, install the app, or download a PC SQLite backup.
 
 - `sat-clean.db`, `sat-math-clean.db`, `maturita-slovak-clean.db`, and `maturita-math-clean.db`: clean templates with no attempts, notes, review flags, personal tags, or personal difficulty ratings.
 - `sat.db`, `sat-math.db`, `maturita-slovak.db`, and `maturita-math.db`: working banks created automatically on first launch.
@@ -109,11 +109,11 @@ Both versions accept **SAT transfer files** (`.satbank.json` / `.json`) up to 50
 
 ## Back up, restore, and update
 
-Click **Export** to download a portable backup of the selected bank. On PC, **Databases → SQLite backup (PC)** also downloads the complete SQLite database. Import either backup on PC, or a portable backup on the phone. Use **Add as separate database** to restore a separate copy or **Merge** to combine it with current progress.
+Choose **Data → Export this bank** to download a portable backup of the selected bank. On PC, **Data → SQLite backup (PC)** also downloads the complete SQLite database. Import either backup on PC, or a portable backup on the phone. Use **Add as separate database** to restore a separate copy or **Merge** to combine it with current progress.
 
 Before installing an update, back up your data. Download the new version to a separate folder, stop the old server, start the new version, and import your backup. Do not replace your working database with the clean template.
 
-On the phone, opening the app while connected checks for app updates. If one is ready, **Databases → Update app** reloads the new version after saving pending notes. Your IndexedDB banks are preserved. New releases do not automatically replace your question bank; use import/merge to add new questions.
+On the phone, opening the app while connected checks for app updates. If one is ready, **Data → Update app** reloads the new version after saving pending notes. Your IndexedDB banks are preserved. New releases update built-in bank content when that bank is next opened; imported banks remain independent.
 
 If using Git, working databases, imported banks, logs, and temporary files are ignored, keeping your personal study data out of commits.
 
@@ -125,7 +125,7 @@ If using Git, working databases, imported banks, logs, and temporary files are i
 - **After restarting your computer:** run the launcher or terminal command again. Saved progress remains.
 - **Old version still appears:** stop the old server before starting your updated folder. If you used the hidden Windows launcher and cannot identify the process, restarting your computer stops it.
 - **Import rejected:** use an app transfer/backup. Phones require the portable JSON format; convert old `.db` files using Export on PC. A content-conflict message means you should add the file separately to inspect it.
-- **Phone will not open offline:** open the installed app while connected and wait for Ready offline inside Databases. Installing from a `file://` URL or an ordinary HTTP address on your PC's Wi-Fi network does not provide the HTTPS setup required on phones.
+- **Phone will not open offline:** open the installed app while connected, choose **Data → Download this bank for offline use**, and wait for Offline pack ready. Installing from a `file://` URL or an ordinary HTTP address on your PC's Wi-Fi network does not provide the HTTPS setup required on phones.
 - **Cannot find phone export:** check the browser's Downloads and the Files app. Keep the `.json` extension, then select the file through Import / merge.
 
 ## Question data
@@ -169,7 +169,7 @@ python build_phone.py
 
 Tests use disposable copies and leave your study history untouched. Node 22+ is needed for development tests and refreshing the vendored SDK (`npm run vendor`), not to use the app. The SDK is included in the repository so Python alone can rebuild the website.
 
-`build_phone.py` generates `docs/` from `web/` and the four clean banks only, and refuses to build if any template contains personal progress. It also copies and precaches the Maturita WebP source crops. Commit the generated files after changing the shared UI. GitHub Pages serves **main → /docs**. You can also serve that directory from another HTTPS static host. Preview it locally at `http://127.0.0.1:8765/phone/`; this preview has separate browser storage from the PC database and the public phone URL.
+`build_phone.py` generates `docs/` from `web/` and the four clean banks only, and refuses to build if any template contains personal progress. It copies the Maturita WebP source crops, but the service worker downloads them only when their bank's offline pack is requested. Commit the generated files after changing the shared UI. GitHub Pages serves **main → /docs**. You can also serve that directory from another HTTPS static host. Preview it locally at `http://127.0.0.1:8765/phone/`; this preview has separate browser storage from the PC database and the public phone URL.
 
 ### Optional PDF rebuild
 

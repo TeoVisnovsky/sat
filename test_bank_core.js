@@ -39,5 +39,8 @@ if(process.argv[2]){
  assert.equal(core.merge(structuredClone(validated),structuredClone(validated)).data.attempts.length,validated.attempts.length);
  assert.equal(core.request(timed,'stats').average_ms,41000);
  assert.equal(core.request(timed,'stats').timed,1);
+ const slovak=core.validate(JSON.parse(fs.readFileSync('docs/maturita-slovak-seed.json','utf8'))),year=2008,yearQuestions=slovak.questions.filter(q=>q.year===year),testQuestion=yearQuestions[0];
+ const submission={session_id:'test-session-1',year,timed:true,started_at:new Date().toISOString(),elapsed_ms:60000,total:yearQuestions.length,answers:[{question_id:testQuestion.id,answer:testQuestion.correct_answer,guessed:false,elapsed_ms:1000}]};
+ const firstSubmit=core.request(slovak,'test-submit',submission),secondSubmit=core.request(slovak,'test-submit',submission);assert.deepEqual(firstSubmit,secondSubmit);assert.equal(firstSubmit.score,1);assert.equal(firstSubmit.total,64);assert.equal(slovak.test_sessions.length,1);assert.equal(slovak.attempts.length,1);assert.equal(core.request(slovak,'stats').tests.length,1);core.validate(slovak);
  assert.equal(base.attempts.length,0);console.log('Offline core: idempotency, note resolution, filters, conflicts, timing and validation passed.');
 }

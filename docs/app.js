@@ -1,11 +1,12 @@
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const plain=html=>{const node=document.createElement('div');node.innerHTML=String(html||'');return node.textContent.replace(/\s+/g,' ').trim();};
 const bank=new URLSearchParams(location.search).get('bank')||'main';
 let selectedAnswer=null;
 let meta,questions=[],current=null,answered=false,busy=false,loadVersion=0,listVersion=0;
 let noteTimer,searchTimer,toastTimer,noteQueue=Promise.resolve();
 const pendingNotes=new Map();
-const TEST_KEY='sat-full-test-v2:'+bank;
+const TEST_KEY='sat-full-test-v3:'+bank;
 const readTest=()=>{try{const value=JSON.parse(localStorage.getItem(TEST_KEY));return value&&['active','review'].includes(value.status)?value:null;}catch(e){return null;}};
 let fullTest=readTest();
 const saveTest=()=>{if(fullTest)localStorage.setItem(TEST_KEY,JSON.stringify(fullTest));else localStorage.removeItem(TEST_KEY);};
@@ -13,14 +14,14 @@ const testEntry=id=>fullTest?.answers?.[id];
 const inTest=()=>!!fullTest;
 const activeTest=()=>fullTest?.status==='active';
 const difficultyLabel=value=>({easy:'Easy',medium:'Medium',hard:'Hard',introductory:'Introductory',standard:'Standard',challenging:'Challenging'})[value]||value;
-const shortName=name=>name.replace(/^SAT\s*/i,'').split('·')[0].trim()||name;
+const shortName=name=>name.replace(/\s*·\s*(original|fresh) bank$/i,'').trim()||name;
 const switchBank=safe(async next=>{
  if(next===bank)return;
  if(busy){$('bankSelect').value=bank;toast('Wait for your answer to finish saving.');return;}
  try{await flushNotes();location.href=location.pathname+'?bank='+encodeURIComponent(next);}
  catch(e){$('bankSelect').value=bank;throw e;}
 });
-const fillBanks=banks=>{$('bankSelect').innerHTML=banks.map(b=>`<option value="${esc(b.id)}">${esc(b.name)}</option>`).join('');$('bankSelect').value=bank;document.title='SAT · '+(shortName(banks.find(b=>b.id===bank)?.name||'')||'practice')+' practice';};
+const fillBanks=banks=>{const name=shortName(banks.find(b=>b.id===bank)?.name||'Question bank');$('bankSelect').innerHTML=banks.map(b=>`<option value="${esc(b.id)}">${esc(shortName(b.name))}</option>`).join('');$('bankSelect').value=bank;$('currentBankName').textContent=name;document.title=name+' · Practice';};
 const noteParents=new Map();
 async function api(path,data){
  if(window.SATOffline)return SATOffline.request(bank,path,data);
@@ -30,24 +31,33 @@ async function api(path,data){
 function fail(e){$('error').textContent=e.message||String(e);$('error').hidden=false;}
 function safe(fn){return (...args)=>Promise.resolve(fn(...args)).catch(fail);}
 function toast(message){$('toast').textContent=message;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,2300);}
-function state(q){if(activeTest())return testEntry(q.id)?.answer?'test-done':'unseen';if(fullTest?.status==='review'&&fullTest.results?.[q.id])return fullTest.results[q.id].is_correct?'correct':'incorrect';return q.needs_review?'review':q.latest_correct===1?'correct':q.latest_correct===0?'incorrect':'unseen';}
-function stateLabel(q){return {review:'Needs review',correct:'Correct',incorrect:'Incorrect',unseen:activeTest()?'Not answered':'Unseen','test-done':'Answered'}[state(q)];}
+function state(q){if(activeTest())return testEntry(q.id)?.flagged?'test-flagged':testEntry(q.id)?.answer?'test-done':'unseen';if(fullTest?.status==='review')return fullTest.results?.[q.id]?.is_correct?'correct':fullTest.results?.[q.id]?'incorrect':'blank';return q.needs_review?'review':q.latest_correct===1?'correct':q.latest_correct===0?'incorrect':'unseen';}
+function stateLabel(q){return {review:'Needs review',correct:'Correct',incorrect:'Incorrect',blank:'Left blank',unseen:activeTest()?'Not answered':'Unseen','test-done':'Answered','test-flagged':'Flagged'}[state(q)];}
 function fillSkills(){const selected=$('skill').value,domain=$('domain').value,skills=domain?meta.skills.filter(s=>s.domain_id==domain):[...new Map(meta.skills.map(s=>[s.name,s])).values()];$('skill').innerHTML='<option value="">All skills</option>'+skills.map(s=>`<option value="${domain?s.id:'name:'+s.name}">${esc(s.name)}</option>`).join('');$('skill').value=[...$('skill').options].some(o=>o.value===selected)?selected:'';}
 function fillTags(){const selected=$('tag').value;$('tag').innerHTML='<option value="">All tags</option>'+meta.tags.map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join('');$('tag').value=selected;}
+const filterControls=['sideYear','domain','skill','difficulty','status','my_difficulty','tag','answer_type','text_mode','section'];
+function renderActiveFilters(){
+ const labels=[];for(const id of filterControls){const el=$(id);if(el&&!el.hidden&&el.value)labels.push({id,label:el.selectedOptions?.[0]?.textContent||el.value});}
+ if($('search').value.trim())labels.push({id:'search',label:'Search: '+$('search').value.trim()});if($('shuffle').checked)labels.push({id:'shuffle',label:'Shuffled'});
+ $('activeFilters').innerHTML=labels.map(x=>`<button class="active-filter" data-filter="${x.id}" title="Remove filter">${esc(x.label)} ×</button>`).join('');
+ $('activeFilters').querySelectorAll('button').forEach(button=>button.onclick=safe(async()=>{const id=button.dataset.filter;if(id==='shuffle')$('shuffle').checked=false;else $(id).value='';if(id==='domain'){ $('skill').value='';fillSkills();}await loadList();}));
+}
+function listTitle(q){const text=plain(q.prompt_html);if(text&&!/^choose the best answer\.?$/i.test(text))return text.slice(0,92);return meta.is_maturita?(q.subcategory||q.domain):q.skill;}
 function renderList(){
  $('matchCount').textContent=`${questions.length} question${questions.length===1?'':'s'}`;
- const first=questions.slice(0,300),active=current&&questions.find(q=>q.id===current.id);const visible=questions.length>300?[...first,...(active&&!first.some(q=>q.id===active.id)?[active]:[])]:questions;
- $('questionList').innerHTML=visible.map(q=>`<button class="question-row ${current?.id===q.id?'selected':''}" data-id="${q.id}" aria-label="${q.id}, ${meta.is_maturita?esc(q.domain):esc(q.skill)}, ${stateLabel(q)}"><span class="state-icon ${state(q)}" aria-hidden="true">${{review:'↺',correct:'✓',incorrect:'×',unseen:'○','test-done':'●'}[state(q)]}</span><span><strong>${meta.is_maturita?esc(q.domain):esc(q.skill)}</strong><small>${meta.is_maturita?`${q.year} · Question ${q.ordinal} · ${q.answer_type==='choice'?'choice':q.answer_type==='numeric'?'number':'short answer'}`:`${q.id} · ${difficultyLabel(q.difficulty)}`}</small></span></button>`).join('')+(questions.length>300?'<p class="secondary-info">Showing the first 300 matches. Use filters to narrow the list.</p>':'')||'<p class="secondary-info">No questions match these filters.</p>';
+ $('questionList').innerHTML=questions.map(q=>`<button class="question-row ${current?.id===q.id?'selected':''}" data-id="${q.id}" aria-label="${q.id}, ${esc(listTitle(q))}, ${stateLabel(q)}"><span class="state-icon ${state(q)}" aria-hidden="true">${{review:'↺',correct:'✓',incorrect:'×',blank:'—',unseen:'○','test-done':'●','test-flagged':'⚑'}[state(q)]}</span><span><strong class="row-title">${esc(listTitle(q))}</strong>${meta.is_maturita?`<span class="row-category">${esc(q.domain)}</span>`:''}<small>${meta.is_maturita?`${q.year} · Question ${q.ordinal}${meta.is_slovak?` · Section ${Math.floor((q.ordinal-1)/8)+1}`:''}`:`${q.id} · ${difficultyLabel(q.difficulty)}`}</small></span></button>`).join('')||'<p class="secondary-info">No questions match these filters.</p>';
  $('questionList').querySelectorAll('button').forEach(b=>b.onclick=safe(()=>openQuestion(b.dataset.id)));
+ renderActiveFilters();$('mobileQuestionState').textContent=current?`${Math.max(1,questions.findIndex(q=>q.id===current.id)+1)} / ${questions.length}`:`${questions.length}`;
 }
 async function loadList(selectFirst=true){
- const version=++listVersion;const params=new URLSearchParams();for(const key of ['domain','skill','difficulty','status','my_difficulty','tag','search','year','answer_type','text_mode','section'])if($(key)&&$(key).value){const value=$(key).value;if(key==='skill'&&value.startsWith('name:'))params.set('skill_name',value.slice(5));else params.set(key,value);}if(inTest()){params.set('year',fullTest.year);params.delete('section');params.delete('status');params.delete('difficulty');params.delete('my_difficulty');params.delete('tag');}if($('shuffle')?.checked&&!inTest())params.set('shuffle','1');
+ const version=++listVersion;const params=new URLSearchParams();for(const key of ['domain','skill','difficulty','status','my_difficulty','tag','search','answer_type','text_mode','section'])if($(key)&&$(key).value){const value=$(key).value;if(key==='skill'&&value.startsWith('name:'))params.set('skill_name',value.slice(5));else params.set(key,value);}if($('sideYear')?.value)params.set('year',$('sideYear').value);if(inTest()){params.set('year',fullTest.year);params.delete('section');params.delete('status');params.delete('difficulty');params.delete('my_difficulty');params.delete('tag');}if($('shuffle')?.checked&&!inTest())params.set('shuffle','1');
  const result=await api('questions?'+params);if(version!==listVersion)return;questions=result;renderList();
  if(selectFirst){if(questions.length)await openQuestion(questions[0].id);else{await flushNotes();current=null;++loadVersion;history.replaceState(null,'',location.pathname+location.search);$('workspace').innerHTML='<div class="empty"><h2>Nothing here yet.</h2><p>Try another filter, or come back after a little practice.</p></div>';}}
 }
 async function stats(){
  const s=await api('stats');$('totalCount').textContent=s.total;$('doneCount').textContent=`${s.done} of ${s.total} completed`;$('completion').max=s.total;$('completion').value=s.done;
  $('statsCards').innerHTML=`<div class="stat"><strong>${s.done}<small class="secondary-info"> / ${s.total}</small></strong><span>Questions completed</span></div><div class="stat"><strong>${s.done?Math.round(100*s.first_correct/s.done)+'%':'—'}</strong><span>First-attempt accuracy</span></div><div class="stat"><strong>${s.review}</strong><span>Need another look</span></div><div class="stat"><strong>${s.average_ms==null?'—':Timers.clock(s.average_ms)}</strong><span>Average per question${s.timed?` · ${s.timed} timed`:''}</span></div>`;
+ const tests=s.tests||[];$('testHistory').hidden=!tests.length;$('testHistoryRows').innerHTML=tests.map(t=>`<div class="test-history-row"><span><strong>${t.year}</strong><small>${t.timed?'Timed':'Untimed'} · ${new Date(t.submitted_at).toLocaleDateString()}</small></span><span>${t.score} / ${t.total}</span><span>${Timers.clock(t.elapsed_ms)}</span></div>`).join('');
  const byCategory=meta.is_maturita&&Array.isArray(s.categories),rows=byCategory?s.categories:s.skills;$('progressBreakdownTitle').textContent=byCategory?'Progress by category':'Progress by skill';
  $('skillStats').innerHTML=rows.map(k=>`<div class="skill-stat"><button data-${byCategory?'domain':'skill'}="${k.id}">${esc(k.name)}</button><div><small>${k.done} / ${k.total} completed</small><progress value="${k.done}" max="${k.total}"></progress></div><div class="accuracy">${k.done?Math.round(100*k.correct/k.done)+'%':'—'}<br><small>accuracy</small></div><div class="accuracy">${k.average_ms==null?'—':Timers.clock(k.average_ms)}<br><small>average</small></div></div>`).join('');
  $('skillStats').querySelectorAll('button').forEach(b=>b.onclick=safe(async()=>{showView(false);for(const k of ['difficulty','status','my_difficulty','tag','search'])$(k).value='';if(byCategory){$('domain').value=b.dataset.domain;$('skill').value='';fillSkills();}else{$('domain').value='';fillSkills();$('skill').value=b.dataset.skill;}await loadList();}));
@@ -56,6 +66,7 @@ async function flushNotes(){clearTimeout(noteTimer);await noteQueue;if(pendingNo
 async function openQuestion(id){
  await flushNotes();const version=++loadVersion;busy=false;answered=false;selectedAnswer=null;$('workspace').setAttribute('aria-busy','true');
  const q=await api('question/'+id);if(version!==loadVersion)return;current=q;noteParents.set(id,q.note_parents);history.replaceState(null,'','#q='+id);renderList();renderQuestion();$('workspace').removeAttribute('aria-busy');
+ if(innerWidth<720){$('practiceView').classList.remove('filters-open');$('mobileFilters').setAttribute('aria-expanded','false');$('drawerBackdrop').hidden=true;}
 }
 function renderQuestion(){
  const q=current;const pos=questions.findIndex(x=>x.id===q.id);
@@ -64,7 +75,7 @@ function renderQuestion(){
  const passage=q.passage_html?(q.requires_stimulus?`<div class="passage-text">${SATCore.html(q.passage_html)}</div>`:`<details class="optional-passage" open><summary>Source passage · optional for this question</summary><div class="passage-text">${SATCore.html(q.passage_html)}</div></details>`):'';
  const examEntry=testEntry(q.id),reviewing=fullTest?.status==='review',testing=activeTest();
  $('workspace').classList.toggle('test-review',reviewing);
- $('workspace').innerHTML=`<div class="question-top"><span>${pos>=0?`${pos+1} of ${questions.length} · `:''}${meta.is_maturita?`${q.year} · Question ${q.ordinal}`:q.id}</span><div class="question-actions"><button id="copyLink">Copy link</button><button id="reviewToggle" ${inTest()?'hidden':''}>${q.needs_review?'✓ In review':'Mark for review'}</button></div></div>
+ $('workspace').innerHTML=`<div class="question-top"><span>${pos>=0?`${pos+1} of ${questions.length} · `:''}${meta.is_maturita?`${q.year} · Question ${q.ordinal}`:q.id}</span><div class="question-actions"><details class="question-action-menu"><summary aria-label="Question actions">•••</summary><div><button id="copyLink">Copy link</button><button id="reviewToggle" ${inTest()?'hidden':''}>${q.needs_review?'✓ In review':'Mark for review'}</button><button id="flagTest" class="test-flag" ${inTest()?'':'hidden'} aria-pressed="${!!examEntry?.flagged}">${examEntry?.flagged?'✓ Flagged':'Flag for review'}</button></div></details></div></div>
  ${metadata}<span class="badge" id="stateBadge">${stateLabel(q)}</span>
  ${passage}
  <details class="transcript" ${q.assets.length?'':'hidden'}><summary>Original PDF passage</summary>${q.assets.map(a=>`<img class="passage-image" src="/${esc(a.file_path)}" alt="${esc(a.alt_text)}">`).join('')}</details>
@@ -73,8 +84,7 @@ function renderQuestion(){
  <div class="next-row"><span class="secondary-info" id="attemptInfo">${testing?(examEntry?.answer?'Answer saved for this test':'Not answered in this test'):reviewing?'Test submitted · review your result':q.attempt_count?`${q.attempt_count} previous attempt${q.attempt_count===1?'':'s'} · answer again to check`:'Not attempted yet'}</span><button id="nextQuestion" class="primary">Next question →</button></div>
  <div ${inTest()?'hidden':''}><button id="showNotes" class="text-button">Show notes without answering</button><div id="notesPanel" hidden><div class="notes-heading"><label for="note">Your notes</label><span class="save-status" id="saveStatus">${q.note?'Saved':'Autosaves'}</span></div>
  <textarea id="note" placeholder="What did I miss? What rule or clue will help next time?">${esc(q.note)}</textarea><button class="text-button" id="saveNote">Save now</button></div>
- <div id="personalTagEditor" ${meta.is_maturita?'hidden':''}><label for="personalTags">Personal tags</label><div class="tag-editor"><input id="personalTags" placeholder="comma splice, vocabulary…" value="${esc(q.tags.join(', '))}"><button id="saveTags">Save tags</button></div></div>
- <details class="history"><summary>Attempt history (${q.history.length}) & source</summary><ul>${q.history.map(h=>`<li>${esc(h.answered_at)} UTC · ${h.selected_answer} · ${h.is_correct?'Correct':'Incorrect'}${h.guessed?' · Guessed':''}${h.elapsed_ms==null?'':' · '+Timers.clock(h.elapsed_ms)}</li>`).join('')||'<li>No attempts yet.</li>'}</ul>${q.sources.map(s=>`<p>${esc(s.filename)} · page ${s.page_start}${s.page_end!==s.page_start?'–'+s.page_end:''}</p>`).join('')}</details></div>`;
+ <details class="question-details"><summary>Question details</summary><div class="revealed-metadata"><span class="badge">${esc(q.domain)}</span><span class="badge">${esc(q.skill)}</span>${meta.is_slovak?`<span class="badge">Section ${Math.floor((q.ordinal-1)/8)+1}</span>`:''}</div><div id="personalTagEditor" ${meta.is_maturita?'hidden':''}><label for="personalTags">Personal tags</label><div class="tag-editor"><input id="personalTags" placeholder="comma splice, vocabulary…" value="${esc(q.tags.join(', '))}"><button id="saveTags">Save tags</button></div></div><div class="history"><strong>Attempt history (${q.history.length})</strong><ul>${q.history.map(h=>`<li>${esc(h.answered_at)} UTC · ${h.selected_answer} · ${h.is_correct?'Correct':'Incorrect'}${h.guessed?' · Guessed':''}${h.elapsed_ms==null?'':' · '+Timers.clock(h.elapsed_ms)}</li>`).join('')||'<li>No attempts yet.</li>'}</ul>${q.sources.map(s=>`<p>${esc(s.filename)} · page ${s.page_start}${s.page_end!==s.page_start?'–'+s.page_end:''}</p>`).join('')}</div></details></div>`;
  Timers.startQuestion(q.id);
  $('workspace').querySelectorAll('.choice').forEach(b=>b.onclick=()=>selectAnswer(b.dataset.letter));
  if(q.answer_type!=='choice'){$('numericAnswer').oninput=()=>{selectedAnswer=$('numericAnswer').value.trim();$('checkAnswer').disabled=!selectedAnswer;};$('numericAnswer').onkeydown=e=>{if(e.key==='Enter'&&!$('checkAnswer').disabled){e.preventDefault();$('checkAnswer').click();}};}
@@ -87,6 +97,7 @@ function renderQuestion(){
   $('reviewToggle').onclick=safe(async()=>{const value=!q.needs_review;await api('review',{question_id:q.id,needs_review:value});q.needs_review=+value;$('reviewToggle').textContent=value?'✓ In review':'Mark for review';$('stateBadge').textContent=stateLabel(q);await refreshProgress();});
  }
  $('copyLink').onclick=safe(async()=>{await navigator.clipboard.writeText(location.href);toast('Question link copied');});
+ if(inTest())$('flagTest').onclick=()=>{const entry=testEntry(q.id)||{};entry.flagged=!entry.flagged;fullTest.answers[q.id]=entry;saveTest();$('flagTest').setAttribute('aria-pressed',String(entry.flagged));$('flagTest').textContent=entry.flagged?'✓ Flagged':'Flag for review';renderList();};
  $('nextQuestion').onclick=safe(nextQuestion);
  if(examEntry?.answer){selectedAnswer=examEntry.answer;$('guessed').checked=!!examEntry.guessed;if(q.answer_type==='choice')$('workspace').querySelectorAll('.choice').forEach(b=>{const selected=b.dataset.letter===selectedAnswer;b.classList.toggle('selected',selected);b.setAttribute('aria-pressed',String(selected));});else $('numericAnswer').value=selectedAnswer;if(testing)$('checkAnswer').disabled=false;}
  if(reviewing)showTestResult(q,fullTest.results?.[q.id]);
@@ -100,12 +111,13 @@ function selectAnswer(letter){
 }
 function updateTestUI(){
  const bar=$('testModeBar');if(!bar)return;bar.hidden=!inTest();
+ $('practiceView').classList.toggle('test-active',inTest());
  $('filterPanel').hidden=inTest();
  $('fullTestSetup').hidden=inTest();$('activeTestCard').hidden=!inTest();
  if(!inTest())return;
  const done=Object.values(fullTest.answers||{}).filter(entry=>entry.answer).length,total=questions.length||fullTest.total||0;
- $('testModeProgress').textContent=fullTest.status==='active'?`Full test · ${done}/${total} answered`:`Test review · ${fullTest.score}/${fullTest.answered} correct`;
- $('activeTestTitle').textContent=`${fullTest.year} · ${total} questions`;$('activeTestProgress').textContent=fullTest.status==='active'?`${done} answered · ${Math.max(0,total-done)} remaining`:`${fullTest.score} of ${fullTest.answered} correct`;
+ $('testModeProgress').textContent=fullTest.status==='active'?`Full test · ${done}/${total} answered`:`Results · ${fullTest.score}/${fullTest.total} correct`;
+ $('activeTestTitle').textContent=`${fullTest.year} · ${total} questions`;$('activeTestProgress').textContent=fullTest.status==='active'?`${done} answered · ${Math.max(0,total-done)} remaining`:`${fullTest.score} of ${fullTest.total} correct`;
  $('submitFullTest').textContent=fullTest.status==='active'?'Finish test':'Exit review';
  $('submitFullTestMenu').textContent=fullTest.status==='active'?'Finish and submit test':'Exit test review';
  $('submitFullTest').onclick=fullTest.status==='active'?openSubmitDialog:safe(exitTestReview);
@@ -119,7 +131,7 @@ async function exitTestReview(){fullTest=null;saveTest();updateTestUI();await lo
 async function saveTestAnswer(){
  if(!activeTest()||!current||!selectedAnswer)return;
  const first=!testEntry(current.id)?.answer,spent=Timers.stopQuestion();
- fullTest.answers[current.id]={answer:selectedAnswer,guessed:$('guessed').checked,elapsed_ms:spent};saveTest();
+ fullTest.answers[current.id]={...testEntry(current.id),answer:selectedAnswer,guessed:$('guessed').checked,elapsed_ms:spent};saveTest();
  if(first)Timers.countAnswer();
  answered=true;$('checkAnswer').textContent='Saved';$('attemptInfo').textContent='Answer saved for this test';renderList();updateTestUI();
  await nextQuestion();
@@ -128,15 +140,21 @@ function showTestResult(q,result){
  const entry=testEntry(q.id);$('workspace').querySelectorAll('.choice').forEach(b=>{b.disabled=true;if(result&&b.dataset.letter===result.correct_answer)b.classList.add('correct');if(entry&&b.dataset.letter===entry.answer&&!result?.is_correct)b.classList.add('wrong');});
  if($('numericAnswer'))$('numericAnswer').disabled=true;
  if(!result){$('feedback').innerHTML='<div class="feedback"><h3>Not answered.</h3><p>This question was left blank when the test was submitted.</p></div>';return;}
- const section=Math.floor((q.ordinal-1)/8)+1;
- $('feedback').innerHTML=`<div class="feedback"><div class="revealed-metadata"><span class="badge">${esc(q.domain)}</span><span class="badge">${esc(q.skill)}</span>${bank==='maturita-slovak'?`<span class="badge">Section ${section}</span>`:''}</div><h3>${result.is_correct?'Correct.':`Not quite. The correct answer is ${esc(result.correct_answer)}.`}</h3><details ${result.is_correct?'':'open'}><summary>Why this answer works</summary>${SATCore.html(result.explanation_html)}</details></div>`;
+ $('feedback').innerHTML=`<div class="feedback"><h3>${result.is_correct?'Correct.':`Not quite. The correct answer is ${esc(result.correct_answer)}.`}</h3><details ${result.is_correct?'':'open'}><summary>Why this answer works</summary>${SATCore.html(result.explanation_html)}</details></div>`;
+}
+function renderTestResultsOverview(){
+ if(fullTest?.status!=='review')return;current=null;renderList();history.replaceState(null,'',location.pathname+location.search);
+ const total=fullTest.total||questions.length,answeredCount=fullTest.answered||0,blank=total-answeredCount,elapsed=fullTest.elapsed_ms||0;
+ const groups=new Map();for(const q of questions){const name=meta.is_slovak?`Section ${Math.floor((q.ordinal-1)/8)+1}`:q.domain;const item=groups.get(name)||{total:0,correct:0};item.total++;item.correct+=+!!fullTest.results?.[q.id]?.is_correct;groups.set(name,item);}
+ $('workspace').innerHTML=`<div class="test-results"><div class="test-results-header"><p class="eyebrow">${fullTest.year} FULL TEST</p><h1>${fullTest.score} of ${total} correct</h1><p class="secondary-info">Answers are now available for review.</p></div><div class="result-summary"><div><strong>${fullTest.score}</strong><span>Correct</span></div><div><strong>${answeredCount-fullTest.score}</strong><span>Incorrect</span></div><div><strong>${blank}</strong><span>Blank</span></div><div><strong>${Timers.clock(elapsed)}</strong><span>Time</span></div></div><h2>Breakdown</h2><div class="result-breakdown">${[...groups].map(([name,item])=>`<div class="result-breakdown-row"><span>${esc(name)}</span><strong>${item.correct} / ${item.total}</strong><progress value="${item.correct}" max="${item.total}"></progress></div>`).join('')}</div><div class="result-actions"><button id="reviewIncorrect">Review incorrect and blank</button><button id="reviewAll">Review all questions</button><button id="closeTestReview">Close results</button></div></div>`;
+ const openFirst=list=>{const q=list[0];if(q)openQuestion(q.id);else toast('No questions in this group.');};
+ $('reviewIncorrect').onclick=()=>openFirst(questions.filter(q=>!fullTest.results?.[q.id]?.is_correct));$('reviewAll').onclick=()=>openFirst(questions);$('closeTestReview').onclick=safe(exitTestReview);
 }
 async function submitTest(){
  if(!activeTest()||busy)return;busy=true;$('confirmSubmitTest').disabled=true;$('cancelSubmitTest').disabled=true;
  try{
-  const results={};let score=0,answeredCount=0;
-  for(const q of questions){const entry=testEntry(q.id);if(!entry?.answer)continue;const result=await api('attempt',{question_id:q.id,answer:entry.answer,guessed:!!entry.guessed,elapsed_ms:entry.elapsed_ms});results[q.id]=result;answeredCount++;if(result.is_correct)score++;}
-  fullTest.status='review';fullTest.results=results;fullTest.score=score;fullTest.answered=answeredCount;saveTest();Timers.finishExam();$('submitTestDialog').close();updateTestUI();await loadList(false);await stats();if(current)await openQuestion(current.id);toast(`Test submitted · ${score}/${answeredCount} correct.`);
+  const elapsed=Timers.finishExam(),payload={session_id:fullTest.id,year:fullTest.year,timed:!!fullTest.timed,started_at:fullTest.started_at,elapsed_ms:elapsed,total:questions.length,answers:Object.entries(fullTest.answers||{}).filter(([,entry])=>entry.answer).map(([question_id,entry])=>({question_id,answer:entry.answer,guessed:!!entry.guessed,elapsed_ms:entry.elapsed_ms}))};
+  const submitted=await api('test-submit',payload);fullTest.status='review';fullTest.results=submitted.results;fullTest.score=submitted.score;fullTest.answered=submitted.answered;fullTest.total=submitted.total;fullTest.elapsed_ms=submitted.elapsed_ms;saveTest();$('submitTestDialog').close();updateTestUI();await loadList(false);await stats();renderTestResultsOverview();toast(`Test submitted · ${fullTest.score}/${fullTest.total} correct.`);
  }finally{busy=false;$('confirmSubmitTest').disabled=false;$('cancelSubmitTest').disabled=false;}
 }
 async function answer(letter){
@@ -150,7 +168,6 @@ async function answer(letter){
   $('workspace').querySelectorAll('.choice').forEach(b=>{if(b.dataset.letter===result.correct_answer)b.classList.add('correct');if(b.dataset.letter===letter&&!result.is_correct)b.classList.add('wrong');});
   const correctLabel=current.answer_type==='choice'?result.correct_answer:result.correct_answer;
   $('feedback').innerHTML=`<div class="feedback"><h3>${result.is_correct?'Correct.':`Not quite. The correct answer is ${esc(correctLabel)}.`}</h3><span class="secondary-info">${spent===null?'':'Answered in '+Timers.clock(spent)+' · '}${result.needs_review?'Saved to your review queue.':'Attempt saved.'}</span><details ${result.is_correct?'':'open'}><summary>Why this answer works</summary>${SATCore.html(result.explanation_html)}</details></div>`;
-  if(meta.is_maturita)$('feedback').querySelector('.feedback').insertAdjacentHTML('afterbegin',`<div class="revealed-metadata"><span class="badge">${esc(current.domain)}</span><span class="badge">${esc(current.skill)}</span>${bank==='maturita-slovak'?`<span class="badge">Section ${Math.floor((current.ordinal-1)/8)+1}</span>`:''}</div>`);
   if(current.answer_type==='text'&&!result.is_correct){const button=document.createElement('button');button.type='button';button.id='acceptMyAnswer';button.textContent='My answer should count as correct';$('feedback').querySelector('.feedback').append(button);button.onclick=safe(async()=>{await api('attempt-override',{question_id:qid,attempt_id:result.attempt_id});button.disabled=true;button.textContent='Marked correct';current.needs_review=0;current.latest_correct=1;$('reviewToggle').textContent='Mark for review';$('stateBadge').textContent='Correct';await refreshProgress();});}
   $('feedback').querySelector('.feedback details').insertAdjacentHTML('beforebegin',`<fieldset class="difficulty-rating"><legend>How did this feel?</legend><div>${['easy','medium','hard'].map(r=>`<button type="button" data-rating="${r}" aria-pressed="${current.my_difficulty===r}">${r[0].toUpperCase()+r.slice(1)}</button>`).join('')}</div><span id="ratingStatus" role="status">${current.my_difficulty?'Previous rating: '+current.my_difficulty+'. Change it if needed.':'Your rating is separate from the official difficulty.'}</span></fieldset>`);
   $('feedback').querySelectorAll('[data-rating]').forEach(b=>b.onclick=safe(async()=>{
@@ -160,7 +177,7 @@ async function answer(letter){
    finally{if(version===loadVersion)$('feedback').querySelectorAll('[data-rating]').forEach(x=>x.disabled=false);}
   }));
   $('reviewToggle').textContent=result.needs_review?'✓ In review':'Mark for review';$('stateBadge').textContent=stateLabel(current);$('attemptInfo').textContent='Answer saved';
-  const updated=await api('question/'+qid);if(version===loadVersion){current.history=updated.history;current.attempt_count=updated.attempt_count;const history=$('workspace').querySelector('.history');history.querySelector('summary').textContent=`Attempt history (${updated.history.length}) & source`;history.querySelector('ul').innerHTML=updated.history.map(h=>`<li>${esc(h.answered_at)} UTC · ${h.selected_answer} · ${h.is_correct?'Correct':'Incorrect'}${h.guessed?' · Guessed':''}${h.elapsed_ms==null?'':' · '+Timers.clock(h.elapsed_ms)}</li>`).join('');}
+  const updated=await api('question/'+qid);if(version===loadVersion){current.history=updated.history;current.attempt_count=updated.attempt_count;const history=$('workspace').querySelector('.history');history.querySelector('strong').textContent=`Attempt history (${updated.history.length})`;history.querySelector('ul').innerHTML=updated.history.map(h=>`<li>${esc(h.answered_at)} UTC · ${h.selected_answer} · ${h.is_correct?'Correct':'Incorrect'}${h.guessed?' · Guessed':''}${h.elapsed_ms==null?'':' · '+Timers.clock(h.elapsed_ms)}</li>`).join('');}
   await refreshProgress();
  }catch(e){if(version===loadVersion&&!answered){$('workspace').querySelectorAll('.choice').forEach(b=>b.disabled=false);if($('numericAnswer'))$('numericAnswer').disabled=false;$('guessed').disabled=false;$('checkAnswer').disabled=false;}throw e;}finally{if(version===loadVersion)busy=false;}
 }
@@ -208,7 +225,7 @@ const Timers=(function(){
   $('timerDelta').disabled=!paused;
   $('timerDelta').title=paused?'Reset this question to 0:00':'';
   const running=!!set.since||set.ms>0,elapsed=live(set),left=targetMs()-elapsed;
-  $('timerSummary').textContent=running?(set.mode==='down'?clock(Math.max(0,left))+' left':clock(elapsed)):'Timers';
+  $('timerSummary').textContent=running?(set.mode==='down'?clock(Math.max(0,left))+' left':clock(elapsed)):'Timer';
   $('timerMenu').classList.toggle('warning',running&&set.mode==='down'&&left<=300000&&left>0);
   $('timerMenu').classList.toggle('over',running&&set.mode==='down'&&left<=0);
   $('setStatus').textContent=running?clock(elapsed)+' elapsed \u00b7 '+set.answered+' answered'+(set.answered?' \u00b7 '+clock(elapsed/set.answered)+' average':'')+(set.mode==='down'&&left<=0?' \u00b7 time is up':''):'Not started.';
@@ -251,7 +268,7 @@ const Timers=(function(){
   set={mode:timed?'down':'up',ms:0,since:Date.now(),seen:Date.now(),answered:0,locked:!!timed};
   $('setMode').value=set.mode;persist(true);paint();
  }
- function finishExam(){if(set.since){set.ms+=Math.max(0,Date.now()-set.since);set.since=null;}set.locked=false;persist(true);paint();}
+ function finishExam(){if(set.since){set.ms+=Math.max(0,Date.now()-set.since);set.since=null;}set.locked=false;persist(true);paint();return set.ms;}
  function fillPace(){$('paceMinutes').value=pace.minutes;$('paceQuestions').value=pace.questions;}
  function init(){
   hydrate(q);hydrate(set);
@@ -272,19 +289,16 @@ const Timers=(function(){
   addEventListener('pagehide',()=>persist(true));
   loop();paint();
  }
- return {init,startQuestion,stopQuestion,countAnswer,clock,startExam,finishExam};
+ return {init,startQuestion,stopQuestion,countAnswer,clock,startExam,finishExam,examElapsed:()=>live(set)};
 })();
 function showView(progress){$('practiceView').hidden=progress;$('progressView').hidden=!progress;$('progressTab').classList.toggle('active',progress);$('progressTab').textContent=progress?'← Practice':'Progress';}
 async function init(){
  Timers.init();
- document.addEventListener('click',e=>{if(!$('timerMenu').contains(e.target))$('timerMenu').open=false;});
- document.addEventListener('click',e=>{if(!$('bankMenu').contains(e.target))$('bankMenu').open=false;});
- document.addEventListener('click',e=>{if(!$('accountMenu').contains(e.target))$('accountMenu').open=false;});
- document.addEventListener('keydown',e=>{if(e.key==='Escape'){$('bankMenu').open=false;$('timerMenu').open=false;}});
+ for(const id of ['timerMenu','testMenu','bankMenu','dataMenu','accountMenu'])document.addEventListener('click',e=>{if(!$(id).contains(e.target))$(id).open=false;});
+ document.addEventListener('keydown',e=>{if(e.key==='Escape'){for(const id of ['bankMenu','timerMenu','testMenu','dataMenu','accountMenu'])$(id).open=false;closeDrawer();}});
  const banks=await api('banks');
  fillBanks(banks);
  $('sqliteBackup').href='/api/backup?bank='+encodeURIComponent(bank);$('sqliteBackup').hidden=!!window.SATOffline;
- $('openWebApp').hidden=!!window.SATOffline;
  $('sqliteBackup').onclick=safe(async e=>{e.preventDefault();if(busy){toast('Wait for your answer to finish saving.');return;}await flushNotes();location.href=$('sqliteBackup').href;});
  $('exportBank').onclick=safe(async()=>{if(busy){toast('Wait for your answer to finish saving.');return;}await flushNotes();const data=await api('export');data.bank.name=$('bankSelect').selectedOptions[0].textContent;const blob=new Blob([JSON.stringify(data)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='sat-'+new Date().toISOString().slice(0,10)+'.satbank.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),60000);toast('Export ready. Keep the file for transfer or backup.');});
  $('bankSelect').onchange=()=>switchBank($('bankSelect').value);
@@ -302,24 +316,26 @@ async function init(){
  }
  $('mergeBank').onclick=safe(()=>importSelected('merge'));$('addBank').onclick=safe(()=>importSelected('add'));
  if(window.SATOffline)SATOffline.setup().catch(fail);
- $('mobileFilters').onclick=()=>{const open=$('practiceView').classList.toggle('filters-open');$('mobileFilters').setAttribute('aria-expanded',String(open));};
+ const closeDrawer=()=>{$('practiceView').classList.remove('filters-open');$('mobileFilters').setAttribute('aria-expanded','false');$('drawerBackdrop').hidden=true;};
+ $('mobileFilters').onclick=()=>{const open=!$('practiceView').classList.contains('filters-open');$('practiceView').classList.toggle('filters-open',open);$('mobileFilters').setAttribute('aria-expanded',String(open));$('drawerBackdrop').hidden=!open;};$('closeMobileFilters').onclick=closeDrawer;$('drawerBackdrop').onclick=closeDrawer;
  meta=await api('meta');$('domain').innerHTML+=[...meta.domains].map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join('');fillSkills();fillTags();
- $('startFullTest').hidden=!meta.is_maturita;$('fullTestHint').hidden=!meta.is_maturita;
+ $('startFullTest').hidden=!meta.is_maturita;
  $('officialDifficultyWrap').hidden=meta.is_maturita;$('tagFilterWrap').hidden=meta.is_maturita;
- $('maturitaFilters').hidden=!meta.is_maturita;$('sideYearWrap').hidden=!meta.is_maturita;
- const years='<option value="">All years</option>'+meta.years.map(y=>`<option value="${y}">${y}</option>`).join('');$('year').innerHTML=years;$('sideYear').innerHTML=years;
+ $('sideYearWrap').hidden=!meta.is_maturita;
+ const years='<option value="">All years</option>'+meta.years.map(y=>`<option value="${y}">${y}</option>`).join('');$('sideYear').innerHTML=years;$('fullTestYear').innerHTML=meta.years.map(y=>`<option value="${y}">${y}</option>`).join('');
  $('sectionWrap').hidden=!meta.is_slovak;$('section').innerHTML='<option value="">All 8 sections</option>'+Array.from({length:8},(_,i)=>`<option value="${i+1}">Section ${i+1} · questions ${i*8+1}–${i*8+8}</option>`).join('');
- for(const k of ['domain','skill','difficulty','status','my_difficulty','tag','year','answer_type','text_mode','section'])$(k).onchange=safe(async()=>{if(k==='domain'){$('skill').value='';fillSkills();}if(k==='year')$('sideYear').value=$('year').value;await loadList();});
- $('sideYear').onchange=safe(async()=>{$('year').value=$('sideYear').value;await loadList();});$('shuffle').onchange=safe(()=>loadList());
- $('startFullTest').onclick=()=>{if(!$('year').value)$('year').value=String(meta.years.at(-1));const pace=bank==='maturita-slovak'?'100 minutes · 64 questions':'150 minutes · 30 questions';$('fullTestDescription').textContent=`${$('year').value} · ${pace} · official question order`; $('fullTestDialog').showModal();};
- for(const [id,timed] of [['startTimedTest',true],['startUntimedTest',false]])$(id).onclick=safe(async()=>{const year=$('year').value;for(const k of ['domain','skill','difficulty','status','my_difficulty','tag','search','answer_type','text_mode','section'])$(k).value='';$('year').value=$('sideYear').value=year;$('shuffle').checked=false;fillSkills();fullTest={status:'active',year:+year,timed,answers:{},results:{},started_at:new Date().toISOString()};saveTest();await loadList();fullTest.total=questions.length;saveTest();Timers.startExam(timed);updateTestUI();toast(`Full ${year} test started. Answers stay hidden until submission.`);});
+ for(const k of ['domain','skill','difficulty','status','my_difficulty','tag','answer_type','text_mode','section','sideYear'])$(k).onchange=safe(async()=>{if(k==='domain'){$('skill').value='';fillSkills();}await loadList();});$('shuffle').onchange=safe(()=>loadList());
+ $('startFullTest').onclick=()=>{const selected=$('sideYear').value||String(meta.years.at(-1));$('fullTestYear').value=selected;const pace=bank==='maturita-slovak'?'100 minutes · 64 questions':'150 minutes · 30 questions';$('fullTestDescription').textContent=`${pace} · official question order · answers stay hidden until submission.`;$('timedTestDescription').textContent=(bank==='maturita-slovak'?'100':'150')+' minutes · no pausing';$('fullTestDialog').showModal();};
+ for(const [id,timed] of [['startTimedTest',true],['startUntimedTest',false]])$(id).onclick=safe(async()=>{const year=$('fullTestYear').value;for(const k of ['domain','skill','difficulty','status','my_difficulty','tag','search','answer_type','text_mode','section'])$(k).value='';$('sideYear').value=year;$('shuffle').checked=false;fillSkills();fullTest={id:crypto.randomUUID(),status:'active',year:+year,timed,answers:{},results:{},started_at:new Date().toISOString()};saveTest();$('fullTestDialog').close();await loadList();fullTest.total=questions.length;saveTest();Timers.startExam(timed);updateTestUI();$('testMenu').open=false;toast(`Full ${year} test started. Answers stay hidden until submission.`);});$('cancelFullTest').onclick=()=>$('fullTestDialog').close();
  $('cancelSubmitTest').onclick=()=>$('submitTestDialog').close();$('confirmSubmitTest').onclick=safe(submitTest);
+ $('nextUnanswered').onclick=safe(async()=>{const next=questions.find(q=>!testEntry(q.id)?.answer);if(next){await openQuestion(next.id);$('testMenu').open=false;}else toast('Every question has an answer.');});
+ const askExit=restart=>{if(!inTest())return;$('exitTestTitle').textContent=restart?'Restart this test?':'Exit this test?';$('exitTestDescription').textContent=restart?'Your current answers will be cleared and the same year will start again.':'Your current test answers will be removed.';$('confirmExitTest').dataset.restart=String(restart);$('exitTestDialog').showModal();};$('restartFullTest').onclick=()=>askExit(true);$('exitFullTest').onclick=()=>askExit(false);$('cancelExitTest').onclick=()=>$('exitTestDialog').close();$('confirmExitTest').onclick=safe(async()=>{const restart=$('confirmExitTest').dataset.restart==='true',year=fullTest?.year,timed=fullTest?.timed;$('exitTestDialog').close();fullTest=null;saveTest();Timers.finishExam();updateTestUI();if(restart){fullTest={id:crypto.randomUUID(),status:'active',year,timed,answers:{},results:{},started_at:new Date().toISOString()};saveTest();await loadList();fullTest.total=questions.length;saveTest();Timers.startExam(timed);updateTestUI();}else await loadList();});
  $('search').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(safe(()=>loadList()),250);};
  $('unseen').onclick=safe(async()=>{$('status').value='unseen';await loadList();});$('mistakes').onclick=safe(async()=>{$('status').value='review';await loadList();});
- $('clear').onclick=safe(async()=>{for(const k of ['domain','skill','difficulty','status','my_difficulty','tag','search','year','sideYear','answer_type','text_mode','section'])if($(k))$(k).value='';if($('shuffle'))$('shuffle').checked=false;fillSkills();await loadList();});
+ $('clear').onclick=safe(async()=>{for(const k of ['domain','skill','difficulty','status','my_difficulty','tag','search','sideYear','answer_type','text_mode','section'])if($(k))$(k).value='';if($('shuffle'))$('shuffle').checked=false;fillSkills();await loadList();});
  $('progressTab').onclick=safe(async()=>{if(!$('progressView').hidden){showView(false);return;}await flushNotes();showView(true);await stats();});
- if(fullTest&&meta.is_maturita){$('year').value=$('sideYear').value=String(fullTest.year);}else if(fullTest){fullTest=null;saveTest();}
- const initial=new URLSearchParams(location.hash.slice(1)).get('q');await loadList(false);updateTestUI();await stats();if(initial&&questions.some(q=>q.id===initial))await openQuestion(initial);else if(questions.length)await openQuestion(questions[0].id);else $('workspace').innerHTML='<div class="empty"><h2>This bank is empty.</h2><p>Choose another database to start practicing.</p></div>';
+ if(fullTest&&meta.is_maturita){$('sideYear').value=String(fullTest.year);$('fullTestYear').value=String(fullTest.year);}else if(fullTest){fullTest=null;saveTest();}
+ const initial=new URLSearchParams(location.hash.slice(1)).get('q');await loadList(false);updateTestUI();await stats();if(fullTest?.status==='review')renderTestResultsOverview();else if(initial&&questions.some(q=>q.id===initial))await openQuestion(initial);else if(questions.length)await openQuestion(questions[0].id);else $('workspace').innerHTML='<div class="empty"><h2>This bank is empty.</h2><p>Choose another database to start practicing.</p></div>';
  window.addEventListener('hashchange',safe(async()=>{const id=new URLSearchParams(location.hash.slice(1)).get('q');if(id&&id!==current?.id)await openQuestion(id);}));
  window.addEventListener('beforeunload',e=>{if(pendingNotes.size){e.preventDefault();e.returnValue='';}});
  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'&&pendingNotes.size)flushNotes().catch(fail);});

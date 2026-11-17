@@ -22,6 +22,7 @@ def migrate(db):
     db.execute('CREATE TABLE IF NOT EXISTS attempt_ids(attempt_id INTEGER PRIMARY KEY REFERENCES attempts(id),sync_id TEXT NOT NULL UNIQUE)')
     db.execute('CREATE TABLE IF NOT EXISTS note_versions(id TEXT PRIMARY KEY,question_id TEXT NOT NULL REFERENCES questions(id),content TEXT NOT NULL,updated_at TEXT NOT NULL,parents TEXT NOT NULL)')
     db.execute('CREATE TABLE IF NOT EXISTS state_versions(kind TEXT NOT NULL,question_id TEXT NOT NULL REFERENCES questions(id),id TEXT NOT NULL,updated_at TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(kind,question_id))')
+    db.execute('CREATE TABLE IF NOT EXISTS full_test_sessions(id TEXT PRIMARY KEY,year INTEGER NOT NULL,timed INTEGER NOT NULL CHECK(timed IN (0,1)),started_at TEXT NOT NULL,submitted_at TEXT NOT NULL,elapsed_ms INTEGER NOT NULL,total INTEGER NOT NULL,answered INTEGER NOT NULL,score INTEGER NOT NULL,results TEXT NOT NULL)')
     columns={r[1] for r in db.execute('PRAGMA table_info(questions)')}
     if 'answer_type' not in columns:db.execute("ALTER TABLE questions ADD COLUMN answer_type TEXT NOT NULL DEFAULT 'choice'")
     if 'accepted_answers' not in columns:
@@ -103,7 +104,7 @@ def capture(db):
 
 def export_bank(db,name='SAT English'):
     capture(db)
-    result={'format':'sat-bank','version':2,'bank':{'id':db.execute("SELECT value FROM transfer_meta WHERE key='bank_id'").fetchone()[0],'name':name},'exams':[dict(r) for r in db.execute('SELECT * FROM exams ORDER BY subject,year')],'stimuli':[dict(r) for r in db.execute('SELECT * FROM stimuli ORDER BY exam_id,ordinal')],'questions':[],'attempts':[],'notes':[],'ratings':[],'reviews':[],'tags':[]}
+    result={'format':'sat-bank','version':2,'bank':{'id':db.execute("SELECT value FROM transfer_meta WHERE key='bank_id'").fetchone()[0],'name':name},'exams':[dict(r) for r in db.execute('SELECT * FROM exams ORDER BY subject,year')],'stimuli':[dict(r) for r in db.execute('SELECT * FROM stimuli ORDER BY exam_id,ordinal')],'questions':[],'attempts':[],'notes':[],'ratings':[],'reviews':[],'tags':[],'test_sessions':[]}
     for r in db.execute('SELECT q.*,s.name skill,d.name domain,e.year FROM questions q JOIN skills s ON s.id=q.skill_id JOIN domains d ON d.id=s.domain_id LEFT JOIN exams e ON e.id=q.exam_id ORDER BY q.rowid'):
         q={k:r[k] for k in FIELDS if k not in ('choices','accepted_answers')}
         q['accepted_answers']=json.loads(r['accepted_answers'])
@@ -116,11 +117,12 @@ def export_bank(db,name='SAT English'):
     for r in db.execute('SELECT * FROM state_versions'):
         result[r['kind']].append(dict(id=r['id'],question_id=r['question_id'],updated_at=r['updated_at'],**{('rating' if r['kind']=='ratings' else 'needs_review'):json.loads(r['value'])}))
     result['tags']=[dict(r) for r in db.execute('SELECT question_id,name FROM question_tags JOIN tags ON tags.id=tag_id')]
+    result['test_sessions']=[dict(r, timed=bool(r['timed']),results=json.loads(r['results'])) for r in db.execute('SELECT * FROM full_test_sessions ORDER BY submitted_at')]
     return result
 
 def validate(data):
     if not isinstance(data,dict) or data.get('format')!='sat-bank' or data.get('version') not in (1,2):raise ValueError('Choose a SAT bank transfer file (version 1 or 2).')
-    data.setdefault('exams',[]);data.setdefault('stimuli',[])
+    data.setdefault('exams',[]);data.setdefault('stimuli',[]);data.setdefault('test_sessions',[])
     def text(x,limit=200000):
         if not isinstance(x,str) or len(x)>limit:raise ValueError('Invalid text in transfer file')
         return x
@@ -130,6 +132,7 @@ def validate(data):
     identity(data['bank']['id']);text(data['bank']['name'],100)
     for key in ['questions','attempts','notes','ratings','reviews','tags']:
         if not isinstance(data.get(key),list) or len(data[key])>200000:raise ValueError('Invalid or oversized record collection')
+    if not isinstance(data['test_sessions'],list) or len(data['test_sessions'])>10000:raise ValueError('Invalid test history')
     qs={}
     for q in data['questions']:
         identity(q['id'])
@@ -185,6 +188,14 @@ def validate(data):
             visit(parent)
         active.remove(ident);done.add(ident)
     for ident in notes:visit(ident)
+    session_ids=set()
+    for s in data['test_sessions']:
+        identity(s['id'])
+        if s['id'] in session_ids:raise ValueError('Duplicate test session')
+        session_ids.add(s['id'])
+        if not isinstance(s.get('year'),int) or not isinstance(s.get('timed'),bool) or not all(isinstance(s.get(k),int) and s[k]>=0 for k in ('elapsed_ms','total','answered','score')) or s['answered']>s['total'] or s['score']>s['answered']:raise ValueError('Invalid test result')
+        s['started_at']=stamp(s['started_at']);s['submitted_at']=stamp(s['submitted_at'])
+        if not isinstance(s.get('results'),list) or any(r.get('question_id') not in qs or not isinstance(r.get('selected_answer'),str) or not isinstance(r.get('correct_answer'),str) or r.get('is_correct') not in (0,1) or r.get('guessed') not in (0,1) for r in s['results']):raise ValueError('Invalid test answers')
     return data
 
 def merge(local,incoming):
@@ -220,6 +231,10 @@ def merge(local,incoming):
     tags={(r['question_id'],r['name'].lower()):r for r in local['tags']}
     for r in incoming['tags']:tags.setdefault((r['question_id'],r['name'].lower()),r)
     local['tags']=list(tags.values())
+    local.setdefault('test_sessions',[]);sessions={s['id']:s for s in local['test_sessions']}
+    for s in incoming.get('test_sessions',[]):
+        if s['id'] in sessions and canonical(sessions[s['id']])!=canonical(s):raise ValueError('Conflicting test session. Nothing was merged; add this as a separate database.')
+        if s['id'] not in sessions:local['test_sessions'].append(s);sessions[s['id']]=s
     report['note_conflicts']=sum(len(set(v['content'] for v in note_leaves([n for n in local['notes'] if n['question_id']==qid])))>1 for qid in {n['question_id'] for n in local['notes']})
     return local,report
 
@@ -253,3 +268,4 @@ def store(db,data):
     for t in data['tags']:
         db.execute('INSERT OR IGNORE INTO tags(name) VALUES (?)',(t['name'],));tid=db.execute('SELECT id FROM tags WHERE name=? COLLATE NOCASE',(t['name'],)).fetchone()[0]
         db.execute('INSERT OR IGNORE INTO question_tags VALUES (?,?)',(t['question_id'],tid))
+    for s in data.get('test_sessions',[]):db.execute('INSERT OR IGNORE INTO full_test_sessions VALUES (?,?,?,?,?,?,?,?,?,?)',(s['id'],s['year'],int(s['timed']),s['started_at'],s['submitted_at'],s['elapsed_ms'],s['total'],s['answered'],s['score'],canonical(s['results'])))

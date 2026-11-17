@@ -20,9 +20,10 @@
   const check=(condition,message)=>{if(!condition)throw Error(message||'Invalid transfer file');};
   const text=(x,max=200000)=>check(typeof x==='string'&&x.length<=max,'Invalid text in transfer file');
   const identity=x=>check(typeof x==='string'&&/^[a-zA-Z0-9_-]{1,80}$/.test(x),'Invalid record ID');
-  check(data?.format==='sat-bank'&&[1,2].includes(data.version),'Choose a SAT bank transfer file (version 1 or 2).');data.exams=data.exams||[];data.stimuli=data.stimuli||[];
+  check(data?.format==='sat-bank'&&[1,2].includes(data.version),'Choose a SAT bank transfer file (version 1 or 2).');data.exams=data.exams||[];data.stimuli=data.stimuli||[];data.test_sessions=data.test_sessions||[];
   identity(data.bank?.id);text(data.bank?.name,100);
   for(const key of ['questions','attempts','notes','ratings','reviews','tags'])check(Array.isArray(data[key])&&data[key].length<=200000);
+  check(Array.isArray(data.test_sessions)&&data.test_sessions.length<=10000,'Invalid test history');
   const qs=new Map();
   for(const q of data.questions){
    identity(q.id);check(!qs.has(q.id),'Duplicate question ID');qs.set(q.id,q);
@@ -51,6 +52,7 @@
   const notes=new Map(data.notes.map(n=>[n.id,n])),done=new Set(),active=new Set();
   function visit(id){check(!active.has(id),'Cyclic note history');if(done.has(id))return;active.add(id);for(const p of notes.get(id).parents){check(notes.has(p)&&notes.get(p).question_id===notes.get(id).question_id,'Broken note history');visit(p);}active.delete(id);done.add(id);}
   for(const id of notes.keys())visit(id);
+  const sessionIds=new Set();for(const s of data.test_sessions){identity(s.id);check(!sessionIds.has(s.id),'Duplicate test session');sessionIds.add(s.id);check(Number.isInteger(s.year)&&Number.isInteger(s.total)&&Number.isInteger(s.answered)&&Number.isInteger(s.score)&&s.total>=0&&s.answered>=0&&s.answered<=s.total&&s.score>=0&&s.score<=s.answered,'Invalid test result');check(typeof s.timed==='boolean'&&Number.isInteger(s.elapsed_ms)&&s.elapsed_ms>=0,'Invalid test timing');check(Number.isFinite(Date.parse(s.started_at))&&Number.isFinite(Date.parse(s.submitted_at)),'Invalid test timestamp');check(Array.isArray(s.results)&&s.results.every(r=>qs.has(r.question_id)&&typeof r.selected_answer==='string'&&typeof r.correct_answer==='string'&&[0,1,false,true].includes(r.is_correct)&&[0,1,false,true].includes(r.guessed)),'Invalid test answers');}
   return data;
  }
  function merge(original,incoming){
@@ -70,6 +72,7 @@
    local[key].push(r);records.set(r.id,r);if(key==='attempts')report.attempts_added++;}}
   for(const key of ['ratings','reviews']){const records=new Map(local[key].map(r=>[r.question_id,r]));for(const r of incoming[key]){const old=records.get(r.question_id);if(old&&r.id===old.id&&canonical(r)!==canonical(old))throw Error('Conflicting state ID. Nothing was merged; add this as a separate database.');if(!old||r.updated_at>old.updated_at||(r.updated_at===old.updated_at&&r.id>old.id))records.set(r.question_id,r);}local[key]=[...records.values()];}
   local.tags=[...new Map([...incoming.tags,...local.tags].map(t=>[t.question_id+'\0'+t.name.toLowerCase(),t])).values()];
+  local.test_sessions=local.test_sessions||[];const sessions=new Map(local.test_sessions.map(s=>[s.id,s]));for(const s of incoming.test_sessions||[]){const old=sessions.get(s.id);if(old&&canonical(old)!==canonical(s))throw Error('Conflicting test session. Nothing was merged; add this as a separate database.');if(!old){local.test_sessions.push(s);sessions.set(s.id,s);}}
   report.note_conflicts=[...new Set(local.notes.map(n=>n.question_id))].filter(id=>new Set(leaves(local.notes.filter(n=>n.question_id===id)).map(n=>n.content)).size>1).length;
   return {data:local,...report};
  }
@@ -98,9 +101,15 @@
     if(p.get('tag')){const t=meta.tags.find(t=>String(t.id)===p.get('tag'));if(!t||!data.tags.some(x=>x.question_id===q.id&&x.name.toLowerCase()===t.name.toLowerCase()))return false;}
     const search=(p.get('search')||'').trim().toLowerCase();return !search||q.id.toLowerCase().includes(search)||q.passage_html.toLowerCase().includes(search);
    });
-   if(url.pathname==='/stats'){const rows=data.questions.map(q=>row(data,q,meta)),first=data.questions.map(q=>attempts(data,q.id)[0]).filter(Boolean);const allTimes=data.attempts.map(a=>a.elapsed_ms).filter(x=>x!==null&&x!==undefined),summary=(items,key)=>items.map(s=>{const qs=rows.filter(q=>q[key]===s.id),as=qs.map(q=>attempts(data,q.id)[0]).filter(Boolean);return {...s,total:qs.length,done:as.length,correct:as.reduce((n,a)=>n+(+a.is_correct),0),average_ms:average(as.map(a=>a.elapsed_ms))};});return {total:rows.length,done:first.length,first_correct:first.reduce((n,a)=>n+(+a.is_correct),0),review:rows.filter(q=>q.needs_review).length,timed:allTimes.length,average_ms:average(allTimes),skills:summary(meta.skills,'skill_id'),categories:summary(meta.domains,'domain_id')};}
+   if(url.pathname==='/stats'){const rows=data.questions.map(q=>row(data,q,meta)),first=data.questions.map(q=>attempts(data,q.id)[0]).filter(Boolean);const allTimes=data.attempts.map(a=>a.elapsed_ms).filter(x=>x!==null&&x!==undefined),summary=(items,key)=>items.map(s=>{const qs=rows.filter(q=>q[key]===s.id),as=qs.map(q=>attempts(data,q.id)[0]).filter(Boolean);return {...s,total:qs.length,done:as.length,correct:as.reduce((n,a)=>n+(+a.is_correct),0),average_ms:average(as.map(a=>a.elapsed_ms))};});return {total:rows.length,done:first.length,first_correct:first.reduce((n,a)=>n+(+a.is_correct),0),review:rows.filter(q=>q.needs_review).length,timed:allTimes.length,average_ms:average(allTimes),skills:summary(meta.skills,'skill_id'),categories:summary(meta.domains,'domain_id'),tests:[...(data.test_sessions||[])].sort((a,b)=>b.submitted_at.localeCompare(a.submitted_at)).slice(0,20)};}
    if(url.pathname.startsWith('/question/')){const q=data.questions.find(q=>q.id===url.pathname.split('/').at(-1));if(!q)throw Error('Question not found');const vs=data.notes.filter(n=>n.question_id===q.id);return {...row(data,q,meta),choices:q.choices,assets:[],note:noteText(vs),note_parents:leaves(vs).map(n=>n.id),tags:data.tags.filter(t=>t.question_id===q.id).map(t=>t.name),history:attempts(data,q.id).reverse(),sources:q.sources||[],answer_notes:q.answer_notes||''};}
    throw Error('Unknown request');
+  }
+  if(path==='test-submit'){
+   const existing=(data.test_sessions||[]).find(s=>s.id===body.session_id);const response=s=>({score:s.score,answered:s.answered,total:s.total,elapsed_ms:s.elapsed_ms,results:Object.fromEntries(s.results.map(r=>{const q=data.questions.find(q=>q.id===r.question_id);return [r.question_id,{is_correct:!!r.is_correct,correct_answer:r.correct_answer,explanation_html:q.explanation_html,needs_review:+(!r.is_correct||r.guessed)}];}))});if(existing)return response(existing);
+   if(typeof body.session_id!=='string'||!/^[a-zA-Z0-9_-]{1,80}$/.test(body.session_id)||!Number.isInteger(body.year)||typeof body.timed!=='boolean'||!Number.isFinite(Date.parse(body.started_at))||!Number.isInteger(body.elapsed_ms)||body.elapsed_ms<0||!Number.isInteger(body.total)||!Array.isArray(body.answers)||body.answers.length>body.total)throw Error('Invalid full test');
+   const copy=structuredClone(data),results=[];for(const item of body.answers){if(!item||typeof item.question_id!=='string')throw Error('Invalid full test answer');const result=request(copy,'attempt',{question_id:item.question_id,answer:item.answer,guessed:!!item.guessed,elapsed_ms:item.elapsed_ms});results.push({question_id:item.question_id,selected_answer:item.answer,is_correct:+result.is_correct,correct_answer:result.correct_answer,guessed:+!!item.guessed,elapsed_ms:item.elapsed_ms??null});}
+   data.attempts=copy.attempts;data.reviews=copy.reviews;data.test_sessions=data.test_sessions||[];const session={id:body.session_id,year:body.year,timed:body.timed,started_at:new Date(body.started_at).toISOString(),submitted_at:now(),elapsed_ms:body.elapsed_ms,total:body.total,answered:results.length,score:results.reduce((n,r)=>n+r.is_correct,0),results};data.test_sessions.push(session);return response(session);
   }
   const q=data.questions.find(q=>q.id===body.question_id);if(!q)throw Error('Question not found');
   const setState=(key,value)=>{data[key]=data[key].filter(r=>r.question_id!==q.id);data[key].push({id:uid(),question_id:q.id,updated_at:now(),...value});};

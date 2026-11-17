@@ -170,7 +170,9 @@ class Handler(BaseHTTPRequestHandler):
                 AVG(a.elapsed_ms) average_ms FROM domains d JOIN skills s ON s.domain_id=d.id JOIN questions q ON q.skill_id=s.id
                 LEFT JOIN attempts a ON a.id=(SELECT id FROM attempts WHERE question_id=q.id ORDER BY julianday(answered_at),COALESCE((SELECT sync_id FROM attempt_ids WHERE attempt_id=attempts.id),printf('%020d',id)) LIMIT 1) GROUP BY d.id''')]
                 for k in categories:k['average_ms']=round(k['average_ms']) if k['average_ms'] is not None else None
-                self.respond(dict(total=total,done=done,first_correct=first[1],review=review,timed=timed[0],average_ms=round(timed[1]) if timed[1] is not None else None,skills=skills,categories=categories));return
+                tests=[dict(r) for r in db.execute('SELECT id,year,timed,started_at,submitted_at,elapsed_ms,total,answered,score FROM full_test_sessions ORDER BY submitted_at DESC LIMIT 20')]
+                for t in tests:t['timed']=bool(t['timed'])
+                self.respond(dict(total=total,done=done,first_correct=first[1],review=review,timed=timed[0],average_ms=round(timed[1]) if timed[1] is not None else None,skills=skills,categories=categories,tests=tests));return
             if path.startswith('/api/question/'):
                 qid=path.rsplit('/',1)[-1];row=db.execute(BASE+' WHERE q.id=?',(qid,)).fetchone()
                 if not row:self.respond({'error':'Question not found'},404);return
@@ -246,6 +248,28 @@ class Handler(BaseHTTPRequestHandler):
             if not 0<length<=100000:raise ValueError('Invalid request size')
             data=json.loads(self.rfile.read(length));qid=data.get('question_id')
             with connect(bank_path(self.headers.get('X-SAT-Bank','main'))) as db:
+                if self.path=='/api/test-submit':
+                    session_id=data.get('session_id');year=data.get('year');timed=data.get('timed');started_at=data.get('started_at');elapsed_ms=data.get('elapsed_ms');total=data.get('total');answers=data.get('answers')
+                    if not isinstance(session_id,str) or not 1<=len(session_id)<=80 or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-' for c in session_id) or not isinstance(year,int) or not isinstance(timed,bool) or not isinstance(started_at,str) or not isinstance(elapsed_ms,int) or elapsed_ms<0 or not isinstance(total,int) or not isinstance(answers,list) or len(answers)>total:raise ValueError('Invalid full test')
+                    old=db.execute('SELECT * FROM full_test_sessions WHERE id=?',(session_id,)).fetchone()
+                    if old:stored=dict(old);stored['results']=json.loads(stored['results'])
+                    else:
+                        expected=db.execute('SELECT COUNT(*) FROM questions q JOIN exams e ON e.id=q.exam_id WHERE e.year=?',(year,)).fetchone()[0]
+                        if expected!=total:raise ValueError('The selected test changed. Reopen it before submitting.')
+                        seen=set();stored_results=[];submitted_at=transfer.now()
+                        for item in answers:
+                            aqid=item.get('question_id') if isinstance(item,dict) else None
+                            if not isinstance(aqid,str) or aqid in seen:raise ValueError('Invalid full test answers')
+                            seen.add(aqid);q=db.execute('SELECT q.*,e.year FROM questions q JOIN exams e ON e.id=q.exam_id WHERE q.id=?',(aqid,)).fetchone()
+                            if not q or q['year']!=year:raise ValueError('A question does not belong to this test')
+                            selected=item.get('answer');guessed=item.get('guessed',False);valid_letters={r[0] for r in db.execute('SELECT letter FROM choices WHERE question_id=?',(aqid,))}
+                            if not isinstance(selected,str) or len(selected)>500 or (q['answer_type']=='choice' and selected not in valid_letters) or (q['answer_type']=='numeric' and transfer.numeric(selected) is None) or (q['answer_type']=='text' and not selected.strip()) or not isinstance(guessed,bool):raise ValueError('Invalid full test answer')
+                            spent=transfer.elapsed(item.get('elapsed_ms'));selected=selected.strip().replace('−','-');question=dict(q);question['accepted_answers']=json.loads(q['accepted_answers']);correct=transfer.answer_correct(question,selected)
+                            cur=db.execute('INSERT INTO attempts(question_id,selected_answer,is_correct,guessed,elapsed_ms,answered_at) VALUES (?,?,?,?,?,?)',(aqid,selected,int(correct),int(guessed),spent,submitted_at));db.execute('INSERT INTO attempt_ids VALUES (?,?)',(cur.lastrowid,transfer.uid()));review=int(not correct or guessed);db.execute('INSERT INTO review_state(question_id,needs_review,updated_at) VALUES (?,?,?) ON CONFLICT(question_id) DO UPDATE SET needs_review=excluded.needs_review,updated_at=excluded.updated_at',(aqid,review,submitted_at));stored_results.append(dict(question_id=aqid,selected_answer=selected,is_correct=int(correct),correct_answer=selected if q['answer_type']=='choice' and len(question['accepted_answers'])>1 else q['correct_answer'],guessed=int(guessed),elapsed_ms=spent))
+                        stored=dict(id=session_id,year=year,timed=timed,started_at=transfer.stamp(started_at),submitted_at=submitted_at,elapsed_ms=elapsed_ms,total=total,answered=len(stored_results),score=sum(r['is_correct'] for r in stored_results),results=stored_results)
+                        db.execute('INSERT INTO full_test_sessions VALUES (?,?,?,?,?,?,?,?,?,?)',(session_id,year,int(timed),stored['started_at'],submitted_at,elapsed_ms,total,stored['answered'],stored['score'],transfer.canonical(stored_results)));transfer.capture(db)
+                    response={r['question_id']:{'is_correct':bool(r['is_correct']),'correct_answer':r['correct_answer'],'explanation_html':db.execute('SELECT explanation_html FROM questions WHERE id=?',(r['question_id'],)).fetchone()[0],'needs_review':int(not r['is_correct'] or r['guessed'])} for r in stored['results']}
+                    self.respond({'score':stored['score'],'answered':stored['answered'],'total':stored['total'],'elapsed_ms':stored['elapsed_ms'],'results':response});return
                 q=db.execute('SELECT * FROM questions WHERE id=?',(qid,)).fetchone()
                 if not q:self.respond({'error':'Question not found'},404);return
                 if self.path=='/api/attempt':

@@ -58,6 +58,16 @@ class TransferTests(unittest.TestCase):
             db.execute('UPDATE notes SET content=?,updated_at=? WHERE question_id=?',('Resolved on PC',transfer.now(),self.qid));resolved=transfer.export_bank(db)
         on_phone=self.node('merge',[phone,resolved]);self.assertEqual(transfer.note_text(on_phone['notes']),'Resolved on PC')
         repeated,_=transfer.merge(resolved,phone);self.assertEqual(transfer.note_text(repeated['notes']),'Resolved on PC')
+
+    def test_full_test_history_survives_export_merge_and_store(self):
+        q=self.base['questions'][0];bank=copy.deepcopy(self.base)
+        session=dict(id='session-roundtrip',year=2026,timed=True,started_at='2026-11-17T10:00:00.000Z',submitted_at='2026-11-17T11:00:00.000Z',elapsed_ms=3600000,total=1,answered=1,score=1,results=[dict(question_id=q['id'],selected_answer=q['correct_answer'],correct_answer=q['correct_answer'],is_correct=1,guessed=0)])
+        bank['test_sessions']=[session];transfer.validate(bank)
+        merged,report=transfer.merge(copy.deepcopy(self.base),bank);self.assertEqual(merged['test_sessions'],[session]);self.assertEqual(report['attempts_added'],0)
+        with server.connect() as db:
+            transfer.store(db,merged);exported=transfer.export_bank(db)
+            self.assertEqual(exported['test_sessions'],[session]);self.assertEqual(db.execute('SELECT COUNT(*) FROM full_test_sessions').fetchone()[0],1)
+        self.assertEqual(self.node('merge',[copy.deepcopy(self.base),bank])['test_sessions'],[session])
     def test_new_questions_and_conflicts(self):
         incoming=copy.deepcopy(self.base);q=copy.deepcopy(incoming['questions'][0]);q['id']='new-question';incoming['questions'].append(q)
         merged,report=transfer.merge(copy.deepcopy(self.base),incoming);self.assertEqual(report['questions_added'],1)

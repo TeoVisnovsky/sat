@@ -16,20 +16,14 @@ window.SATOffline=(function(){
    tx.oncomplete=()=>resolve(result);tx.onerror=tx.onabort=()=>reject(error||Error('Could not save locally. Free some device storage and try again.'));
   });
  }
- const ready=(async()=>{
-  for(const seed of [{id:'main',file:'seed.json',name:'SAT English · original bank',revision:'sat-en-v2'},{id:'math',file:'math-seed.json',name:'SAT Math · original bank',revision:'sat-math-v2'},{id:'maturita-slovak',file:'maturita-slovak-seed.json',name:'Maturita · Slovenský jazyk a literatúra',revision:'maturita-slovak-v3'},{id:'maturita-math',file:'maturita-math-seed.json',name:'Maturita · Matematika',revision:'maturita-math-v2'}]){
-   if(await transaction(storageKey(seed.id),true,(r,store)=>{if(!r)return false;const before=SATCore.canonical(r.data);SATCore.validate(r.data);if(SATCore.canonical(r.data)!==before)store.put(touch(r));return r.seedRevision===seed.revision;}))continue;
-   const response=await fetch('./'+seed.file);if(!response.ok)throw Error('Connect once to download all question banks.');const data=SATCore.validate(await response.json());
-   await transaction(storageKey(seed.id),true,(existing,store)=>{
-    if(!existing){store.put(makeRecord(seed.id,seed.name,data,seed.revision));return;}
-    const ids=new Set(data.questions.map(q=>q.id)),questions=new Map(data.questions.map(q=>[q.id,q]));
-    data.attempts=existing.data.attempts.filter(r=>ids.has(r.question_id)).map(r=>({...r,is_correct:+SATCore.answerCorrect(questions.get(r.question_id),r.selected_answer)}));
-    for(const key of ['notes','ratings','reviews','tags'])data[key]=existing.data[key].filter(r=>ids.has(r.question_id));
-    existing.data=SATCore.validate(data);existing.seedRevision=seed.revision;store.put(touch(existing));
-   });
-  }
- })();
- async function request(bank,path,body){await ready;if(path==='banks')return transaction(null,false,rs=>rs.filter(belongs).map(r=>({id:r.id||r.key,name:r.name})));const result=await transaction(storageKey(bank),body!==undefined,(r,store)=>{if(!r||!belongs(r))throw Error('Database not found. Choose another database.');const result=SATCore.request(r.data,path,body);if(body!==undefined)store.put(touch(r));return result;});if(body!==undefined)changed();return result;}
+ const seeds=[{id:'main',file:'seed.json',name:'SAT English',revision:'sat-en-v2'},{id:'math',file:'math-seed.json',name:'SAT Math',revision:'sat-math-v2'},{id:'maturita-slovak',file:'maturita-slovak-seed.json',name:'Maturita · Slovenský jazyk a literatúra',revision:'maturita-slovak-v3'},{id:'maturita-math',file:'maturita-math-seed.json',name:'Maturita · Matematika',revision:'maturita-math-v2'}];
+ const ready=open;
+ async function ensureBank(id){await ready;const seed=seeds.find(s=>s.id===id);if(!seed)return;
+  if(await transaction(storageKey(seed.id),true,(r,store)=>{if(!r)return false;const before=SATCore.canonical(r.data);SATCore.validate(r.data);if(SATCore.canonical(r.data)!==before)store.put(touch(r));return r.seedRevision===seed.revision;}))return;
+  const response=await fetch('./'+seed.file);if(!response.ok)throw Error('Connect once to download this question bank.');const data=SATCore.validate(await response.json());
+  await transaction(storageKey(seed.id),true,(existing,store)=>{if(!existing){store.put(makeRecord(seed.id,seed.name,data,seed.revision));return;}const ids=new Set(data.questions.map(q=>q.id)),questions=new Map(data.questions.map(q=>[q.id,q]));data.attempts=existing.data.attempts.filter(r=>ids.has(r.question_id)).map(r=>({...r,is_correct:+SATCore.answerCorrect(questions.get(r.question_id),r.selected_answer)}));for(const key of ['notes','ratings','reviews','tags'])data[key]=existing.data[key].filter(r=>ids.has(r.question_id));data.test_sessions=existing.data.test_sessions||[];existing.data=SATCore.validate(data);existing.seedRevision=seed.revision;store.put(touch(existing));});
+ }
+ async function request(bank,path,body){await ready;if(path==='banks')return transaction(null,false,rs=>{const custom=rs.filter(belongs).filter(r=>!seeds.some(s=>s.id===(r.id||r.key))).map(r=>({id:r.id||r.key,name:r.name}));return [...seeds.map(({id,name})=>({id,name})),...custom];});await ensureBank(bank);const result=await transaction(storageKey(bank),body!==undefined,(r,store)=>{if(!r||!belongs(r))throw Error('Database not found. Choose another database.');const result=SATCore.request(r.data,path,body);if(body!==undefined)store.put(touch(r));return result;});if(body!==undefined)changed();return result;}
  async function importFile(bank,file,mode){
   await ready;if(file.size>50*1024*1024)throw Error('Choose a transfer file under 50 MB');
   let incoming;try{incoming=SATCore.validate(JSON.parse(await file.text()));}catch(e){if(/\.db$|\.sqlite3?$/i.test(file.name))throw Error('On your PC, use Export to turn this SQLite database into a transfer file.');throw e;}
@@ -64,10 +58,12 @@ window.SATOffline=(function(){
    offerUpdate();registration.addEventListener('updatefound',()=>{registration.installing?.addEventListener('statechange',offerUpdate);});
   }
   catch(e){status.textContent='Offline setup failed. Reconnect and reload to try again.';}
-  const install=document.getElementById('installApp');install.hidden=false;
+  const install=document.getElementById('installApp');install.hidden=false;const download=document.getElementById('downloadOfflineBank');download.hidden=false;
   let prompt;
   window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();prompt=e;install.textContent='Install on this device';});
   install.onclick=async()=>{if(navigator.storage?.persist)await navigator.storage.persist();if(prompt){await prompt.prompt();prompt=null;}else{document.getElementById('installHelp').hidden=false;}};
+  download.onclick=async()=>{const id=new URLSearchParams(location.search).get('bank')||'main';download.disabled=true;download.textContent='Preparing offline pack…';try{await ensureBank(id);const worker=registration.active||registration.waiting||registration.installing;if(!worker)throw Error('Offline worker is not ready');worker.postMessage({type:'cache-bank',bank:id});}catch(e){download.disabled=false;download.textContent='Download this bank for offline use';status.textContent=e.message;}};
+  navigator.serviceWorker.addEventListener('message',e=>{if(e.data?.type!=='cache-bank-progress')return;if(e.data.done){download.disabled=false;if(e.data.failed){download.textContent='Retry offline download';status.textContent=`Offline pack incomplete (${e.data.failed} file${e.data.failed===1?'':'s'} failed). Reconnect and retry.`;}else{download.textContent='Offline pack ready';status.textContent='This bank is ready offline';}}else download.textContent=`Downloading… ${e.data.loaded} / ${e.data.total}`;});
  }
- return {request,importFile,setup,ready,owner,records,record,applyRemote,acknowledge,guestBanks,copyGuest};
+ return {request,importFile,setup,ready,owner,records,record,applyRemote,acknowledge,guestBanks,copyGuest,ensureBank};
 })();
