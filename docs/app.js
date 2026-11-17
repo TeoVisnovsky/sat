@@ -1,6 +1,5 @@
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const plain=html=>{const node=document.createElement('div');node.innerHTML=String(html||'');return node.textContent.replace(/\s+/g,' ').trim();};
 const bank=new URLSearchParams(location.search).get('bank')||'main';
 let selectedAnswer=null;
 let meta,questions=[],current=null,answered=false,busy=false,loadVersion=0,listVersion=0;
@@ -42,7 +41,7 @@ function renderActiveFilters(){
  $('activeFilters').innerHTML=labels.map(x=>`<button class="active-filter" data-filter="${x.id}" title="Remove filter">${esc(x.label)} ×</button>`).join('');
  $('activeFilters').querySelectorAll('button').forEach(button=>button.onclick=safe(async()=>{const id=button.dataset.filter;if(id==='shuffle')$('shuffle').checked=false;else $(id).value='';if(id==='domain'){ $('skill').value='';fillSkills();}await loadList();}));
 }
-function listTitle(q){const text=plain(q.prompt_html);if(text&&!/^choose the best answer\.?$/i.test(text))return text.slice(0,92);return meta.is_maturita?(q.subcategory||q.domain):q.skill;}
+function listTitle(q){return meta.is_maturita?(q.subcategory||q.domain):q.skill;}
 function renderList(){
  $('matchCount').textContent=`${questions.length} question${questions.length===1?'':'s'}`;
  $('questionList').innerHTML=questions.map(q=>`<button class="question-row ${current?.id===q.id?'selected':''}" data-id="${q.id}" aria-label="${q.id}, ${esc(listTitle(q))}, ${stateLabel(q)}"><span class="state-icon ${state(q)}" aria-hidden="true">${{review:'↺',correct:'✓',incorrect:'×',blank:'—',unseen:'○','test-done':'●','test-flagged':'⚑'}[state(q)]}</span><span><strong class="row-title">${esc(listTitle(q))}</strong>${meta.is_maturita?`<span class="row-category">${esc(q.domain)}</span>`:''}<small>${meta.is_maturita?`${q.year} · Question ${q.ordinal}${meta.is_slovak?` · Section ${Math.floor((q.ordinal-1)/8)+1}`:''}`:`${q.id} · ${difficultyLabel(q.difficulty)}`}</small></span></button>`).join('')||'<p class="secondary-info">No questions match these filters.</p>';
