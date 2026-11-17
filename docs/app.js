@@ -41,10 +41,13 @@ function renderActiveFilters(){
  $('activeFilters').innerHTML=labels.map(x=>`<button class="active-filter" data-filter="${x.id}" title="Remove filter">${esc(x.label)} ×</button>`).join('');
  $('activeFilters').querySelectorAll('button').forEach(button=>button.onclick=safe(async()=>{const id=button.dataset.filter;if(id==='shuffle')$('shuffle').checked=false;else $(id).value='';if(id==='domain'){ $('skill').value='';fillSkills();}await loadList();}));
 }
-function listTitle(q){return meta.is_maturita?(q.subcategory||q.domain):q.skill;}
+function listTitle(q){
+ if(meta.is_slovak)return q.domain;
+ return meta.is_maturita?(q.subcategory||q.domain):q.skill;
+}
 function renderList(){
  $('matchCount').textContent=`${questions.length} question${questions.length===1?'':'s'}`;
- $('questionList').innerHTML=questions.map(q=>`<button class="question-row ${current?.id===q.id?'selected':''}" data-id="${q.id}" aria-label="${q.id}, ${esc(listTitle(q))}, ${stateLabel(q)}"><span class="state-icon ${state(q)}" aria-hidden="true">${{review:'↺',correct:'✓',incorrect:'×',blank:'—',unseen:'○','test-done':'●','test-flagged':'⚑','test-incomplete':'!'}[state(q)]}</span><span><strong class="row-title">${esc(listTitle(q))}</strong>${meta.is_maturita?`<span class="row-category">${esc(q.domain)}</span>`:''}<small>${meta.is_maturita?`${q.year} · Question ${q.ordinal}${meta.is_slovak?` · Section ${Math.floor((q.ordinal-1)/8)+1}`:''}`:`${q.id} · ${difficultyLabel(q.difficulty)}`}</small></span></button>`).join('')||'<p class="secondary-info">No questions match these filters.</p>';
+ $('questionList').innerHTML=questions.map(q=>`<button class="question-row ${current?.id===q.id?'selected':''}" data-id="${q.id}" aria-label="${q.id}, ${esc(listTitle(q))}, ${stateLabel(q)}"><span class="state-icon ${state(q)}" aria-hidden="true">${{review:'↺',correct:'✓',incorrect:'×',blank:'—',unseen:'○','test-done':'●','test-flagged':'⚑','test-incomplete':'!'}[state(q)]}</span><span><strong class="row-title">${esc(listTitle(q))}</strong>${meta.is_maturita&&!meta.is_slovak?`<span class="row-category">${esc(q.domain)}</span>`:''}<small>${meta.is_maturita?`${q.year} · Question ${q.ordinal}${meta.is_slovak?` · Section ${Math.floor((q.ordinal-1)/8)+1}`:''}`:`${q.id} · ${difficultyLabel(q.difficulty)}`}</small></span></button>`).join('')||'<p class="secondary-info">No questions match these filters.</p>';
  $('questionList').querySelectorAll('button').forEach(b=>b.onclick=safe(()=>openQuestion(b.dataset.id)));
  renderActiveFilters();$('mobileQuestionState').textContent=current?`${Math.max(1,questions.findIndex(q=>q.id===current.id)+1)} / ${questions.length}`:`${questions.length}`;
 }
