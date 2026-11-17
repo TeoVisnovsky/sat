@@ -8,7 +8,7 @@ const pendingNotes=new Map();
 const TEST_KEY='sat-full-test-v3:'+bank;
 const readTest=()=>{try{const value=JSON.parse(localStorage.getItem(TEST_KEY));return value&&['active','review'].includes(value.status)?value:null;}catch(e){return null;}};
 let fullTest=readTest();
-const saveTest=()=>{if(fullTest)localStorage.setItem(TEST_KEY,JSON.stringify(fullTest));else localStorage.removeItem(TEST_KEY);};
+const saveTest=(test=fullTest)=>{if(test)localStorage.setItem(TEST_KEY,JSON.stringify(test));else localStorage.removeItem(TEST_KEY);};
 const testEntry=id=>fullTest?.answers?.[id];
 const inTest=()=>!!fullTest;
 const activeTest=()=>fullTest?.status==='active';
@@ -30,8 +30,8 @@ async function api(path,data){
 function fail(e){$('error').textContent=e.message||String(e);$('error').hidden=false;}
 function safe(fn){return (...args)=>Promise.resolve(fn(...args)).catch(fail);}
 function toast(message){$('toast').textContent=message;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,2300);}
-function state(q){if(activeTest())return testEntry(q.id)?.flagged?'test-flagged':testEntry(q.id)?.answer?'test-done':'unseen';if(fullTest?.status==='review')return fullTest.results?.[q.id]?.is_correct?'correct':fullTest.results?.[q.id]?'incorrect':'blank';return q.needs_review?'review':q.latest_correct===1?'correct':q.latest_correct===0?'incorrect':'unseen';}
-function stateLabel(q){return {review:'Needs review',correct:'Correct',incorrect:'Incorrect',blank:'Left blank',unseen:activeTest()?'Not answered':'Unseen','test-done':'Answered','test-flagged':'Flagged'}[state(q)];}
+function state(q){if(activeTest()){const entry=testEntry(q.id);return invalidTestDraft(entry)?'test-incomplete':entry?.flagged?'test-flagged':entry?.answer?'test-done':'unseen';}if(fullTest?.status==='review')return fullTest.results?.[q.id]?.is_correct?'correct':fullTest.results?.[q.id]?'incorrect':'blank';return q.needs_review?'review':q.latest_correct===1?'correct':q.latest_correct===0?'incorrect':'unseen';}
+function stateLabel(q){return {review:'Needs review',correct:'Correct',incorrect:'Incorrect',blank:'Left blank',unseen:activeTest()?'Not answered':'Unseen','test-done':'Answered','test-flagged':'Flagged','test-incomplete':'Needs a valid number'}[state(q)];}
 function fillSkills(){const selected=$('skill').value,domain=$('domain').value,skills=domain?meta.skills.filter(s=>s.domain_id==domain):[...new Map(meta.skills.map(s=>[s.name,s])).values()];$('skill').innerHTML='<option value="">All skills</option>'+skills.map(s=>`<option value="${domain?s.id:'name:'+s.name}">${esc(s.name)}</option>`).join('');$('skill').value=[...$('skill').options].some(o=>o.value===selected)?selected:'';}
 function fillTags(){const selected=$('tag').value;$('tag').innerHTML='<option value="">All tags</option>'+meta.tags.map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join('');$('tag').value=selected;}
 const filterControls=['sideYear','domain','skill','difficulty','status','my_difficulty','tag','answer_type','text_mode','section'];
@@ -44,7 +44,7 @@ function renderActiveFilters(){
 function listTitle(q){return meta.is_maturita?(q.subcategory||q.domain):q.skill;}
 function renderList(){
  $('matchCount').textContent=`${questions.length} question${questions.length===1?'':'s'}`;
- $('questionList').innerHTML=questions.map(q=>`<button class="question-row ${current?.id===q.id?'selected':''}" data-id="${q.id}" aria-label="${q.id}, ${esc(listTitle(q))}, ${stateLabel(q)}"><span class="state-icon ${state(q)}" aria-hidden="true">${{review:'↺',correct:'✓',incorrect:'×',blank:'—',unseen:'○','test-done':'●','test-flagged':'⚑'}[state(q)]}</span><span><strong class="row-title">${esc(listTitle(q))}</strong>${meta.is_maturita?`<span class="row-category">${esc(q.domain)}</span>`:''}<small>${meta.is_maturita?`${q.year} · Question ${q.ordinal}${meta.is_slovak?` · Section ${Math.floor((q.ordinal-1)/8)+1}`:''}`:`${q.id} · ${difficultyLabel(q.difficulty)}`}</small></span></button>`).join('')||'<p class="secondary-info">No questions match these filters.</p>';
+ $('questionList').innerHTML=questions.map(q=>`<button class="question-row ${current?.id===q.id?'selected':''}" data-id="${q.id}" aria-label="${q.id}, ${esc(listTitle(q))}, ${stateLabel(q)}"><span class="state-icon ${state(q)}" aria-hidden="true">${{review:'↺',correct:'✓',incorrect:'×',blank:'—',unseen:'○','test-done':'●','test-flagged':'⚑','test-incomplete':'!'}[state(q)]}</span><span><strong class="row-title">${esc(listTitle(q))}</strong>${meta.is_maturita?`<span class="row-category">${esc(q.domain)}</span>`:''}<small>${meta.is_maturita?`${q.year} · Question ${q.ordinal}${meta.is_slovak?` · Section ${Math.floor((q.ordinal-1)/8)+1}`:''}`:`${q.id} · ${difficultyLabel(q.difficulty)}`}</small></span></button>`).join('')||'<p class="secondary-info">No questions match these filters.</p>';
  $('questionList').querySelectorAll('button').forEach(b=>b.onclick=safe(()=>openQuestion(b.dataset.id)));
  renderActiveFilters();$('mobileQuestionState').textContent=current?`${Math.max(1,questions.findIndex(q=>q.id===current.id)+1)} / ${questions.length}`:`${questions.length}`;
 }
@@ -63,32 +63,33 @@ async function stats(){
 }
 async function flushNotes(){clearTimeout(noteTimer);await noteQueue;if(pendingNotes.size){const batch=[...pendingNotes];noteQueue=(async()=>{for(const [question_id,content] of batch){const result=await api('note',{question_id,content,parents:noteParents.get(question_id)});if(result.note_parents)noteParents.set(question_id,result.note_parents);if(pendingNotes.get(question_id)===content)pendingNotes.delete(question_id);if(current?.id===question_id&&$('saveStatus'))$('saveStatus').textContent=pendingNotes.has(question_id)?'Saving…':'Saved';}})();try{await noteQueue;}catch(e){noteQueue=Promise.resolve();if($('saveStatus'))$('saveStatus').textContent='Not saved — retry below';throw e;}}}
 async function openQuestion(id){
- await flushNotes();const version=++loadVersion;busy=false;answered=false;selectedAnswer=null;$('workspace').setAttribute('aria-busy','true');
- const q=await api('question/'+id);if(version!==loadVersion)return;current=q;noteParents.set(id,q.note_parents);history.replaceState(null,'','#q='+id);renderList();renderQuestion();$('workspace').removeAttribute('aria-busy');
+ await flushNotes();const version=++loadVersion;busy=false;$('workspace').setAttribute('aria-busy','true');
+ const q=await api('question/'+id);if(version!==loadVersion)return;current=q;answered=false;selectedAnswer=null;noteParents.set(id,q.note_parents);history.replaceState(null,'','#q='+id);renderList();renderQuestion();$('workspace').removeAttribute('aria-busy');
  if(innerWidth<720){$('practiceView').classList.remove('filters-open');$('mobileFilters').setAttribute('aria-expanded','false');$('drawerBackdrop').hidden=true;}
 }
 function renderQuestion(){
  const q=current;const pos=questions.findIndex(x=>x.id===q.id);
- const answerControl=q.answer_type==='choice'?`<div class="choices">${q.choices.map(c=>`<button class="choice" aria-pressed="false" data-letter="${c.letter}"><span class="letter">${c.letter}</span><span>${SATCore.html(c.content_html)}</span></button>`).join('')}</div>`:`<div class="numeric-answer"><label for="numericAnswer">${q.answer_type==='text'?'Your short answer':'Your answer'}</label><input id="numericAnswer" ${q.answer_type==='numeric'?'inputmode="decimal"':''} autocomplete="off" placeholder="${q.answer_type==='text'?'Type the answer':'Enter a number, decimal, or fraction'}" aria-describedby="numericHelp"><small id="numericHelp">${q.answer_type==='text'?'The official rubric checks common accepted forms. You can override a strict mismatch after checking.':'Examples: 12, -3.5, 3,5, or 2/3'}</small></div>`;
+ const examEntry=testEntry(q.id),reviewing=fullTest?.status==='review',testing=activeTest();
+ const answerControl=q.answer_type==='choice'?`<div class="choices">${q.choices.map(c=>`<button class="choice" aria-pressed="false" data-letter="${c.letter}"><span class="letter">${c.letter}</span><span>${SATCore.html(c.content_html)}</span></button>`).join('')}</div>`:`<div class="numeric-answer"><label for="numericAnswer">${q.answer_type==='text'?'Your short answer':'Your answer'}</label><input id="numericAnswer" ${testing?'maxlength="500"':''} ${q.answer_type==='numeric'?'inputmode="decimal"':''} autocomplete="off" placeholder="${q.answer_type==='text'?'Type the answer':'Enter a number, decimal, or fraction'}" aria-describedby="numericHelp"><small id="numericHelp">${q.answer_type==='text'?(testing?'Your answer saves as you type.':'The official rubric checks common accepted forms. You can override a strict mismatch after checking.'):'Examples: 12, -3.5, 3,5, or 2/3'}</small></div>`;
  const metadata=meta.is_maturita?'':`<p class="eyebrow">${esc(q.domain)}</p><div class="question-title"><h2>${esc(q.skill)}</h2><span class="badge">${difficultyLabel(q.difficulty)}</span></div>`;
  const passage=q.passage_html?(q.requires_stimulus?`<div class="passage-text">${SATCore.html(q.passage_html)}</div>`:`<details class="optional-passage" open><summary>Source passage · optional for this question</summary><div class="passage-text">${SATCore.html(q.passage_html)}</div></details>`):'';
- const examEntry=testEntry(q.id),reviewing=fullTest?.status==='review',testing=activeTest();
  $('workspace').classList.toggle('test-review',reviewing);
  $('workspace').innerHTML=`<div class="question-top"><span>${pos>=0?`${pos+1} of ${questions.length} · `:''}${meta.is_maturita?`${q.year} · Question ${q.ordinal}`:q.id}</span><div class="question-actions"><details class="question-action-menu"><summary aria-label="Question actions">•••</summary><div><button id="copyLink">Copy link</button><button id="reviewToggle" ${inTest()?'hidden':''}>${q.needs_review?'✓ In review':'Mark for review'}</button><button id="flagTest" class="test-flag" ${inTest()?'':'hidden'} aria-pressed="${!!examEntry?.flagged}">${examEntry?.flagged?'✓ Flagged':'Flag for review'}</button></div></details></div></div>
  ${metadata}<span class="badge" id="stateBadge">${stateLabel(q)}</span>
  ${passage}
  <details class="transcript" ${q.assets.length?'':'hidden'}><summary>Original PDF passage</summary>${q.assets.map(a=>`<img class="passage-image" src="/${esc(a.file_path)}" alt="${esc(a.alt_text)}">`).join('')}</details>
  <div class="instruction${q.passage_html.trim()?'':' stem'}">${SATCore.html(q.prompt_html)||'Choose the best answer.'}</div>${answerControl}
- <div class="check-row" ${reviewing?'hidden':''}><label class="confidence"><input type="checkbox" id="guessed"> I am unsure / guessing</label><button id="checkAnswer" class="primary" disabled>${testing?'Save answer':'Check'}</button></div><div id="feedback" aria-live="polite"></div>
- <div class="next-row"><span class="secondary-info" id="attemptInfo">${testing?(examEntry?.answer?'Answer saved for this test':'Not answered in this test'):reviewing?'Test submitted · review your result':q.attempt_count?`${q.attempt_count} previous attempt${q.attempt_count===1?'':'s'} · answer again to check`:'Not attempted yet'}</span><button id="nextQuestion" class="primary">Next question →</button></div>
+ <div class="check-row" ${reviewing?'hidden':''}><label class="confidence"><input type="checkbox" id="guessed"> I am unsure / guessing</label>${inTest()?'':'<button id="checkAnswer" class="primary" disabled>Check</button>'}</div><div id="feedback" aria-live="polite"></div>
+ <div class="next-row"><span class="secondary-info" id="attemptInfo" ${testing?'role="status"':''}>${testing?testAnswerMessage(examEntry):reviewing?'Test submitted · review your result':q.attempt_count?`${q.attempt_count} previous attempt${q.attempt_count===1?'':'s'} · answer again to check`:'Not attempted yet'}</span><button id="nextQuestion" class="primary">Next question →</button></div>
  <div ${inTest()?'hidden':''}><button id="showNotes" class="text-button">Show notes without answering</button><div id="notesPanel" hidden><div class="notes-heading"><label for="note">Your notes</label><span class="save-status" id="saveStatus">${q.note?'Saved':'Autosaves'}</span></div>
  <textarea id="note" placeholder="What did I miss? What rule or clue will help next time?">${esc(q.note)}</textarea><button class="text-button" id="saveNote">Save now</button></div>
  <details class="question-details"><summary>Question details</summary><div class="revealed-metadata"><span class="badge">${esc(q.domain)}</span><span class="badge">${esc(q.skill)}</span>${meta.is_slovak?`<span class="badge">Section ${Math.floor((q.ordinal-1)/8)+1}</span>`:''}</div><div id="personalTagEditor" ${meta.is_maturita?'hidden':''}><label for="personalTags">Personal tags</label><div class="tag-editor"><input id="personalTags" placeholder="comma splice, vocabulary…" value="${esc(q.tags.join(', '))}"><button id="saveTags">Save tags</button></div></div><div class="history"><strong>Attempt history (${q.history.length})</strong><ul>${q.history.map(h=>`<li>${esc(h.answered_at)} UTC · ${h.selected_answer} · ${h.is_correct?'Correct':'Incorrect'}${h.guessed?' · Guessed':''}${h.elapsed_ms==null?'':' · '+Timers.clock(h.elapsed_ms)}</li>`).join('')||'<li>No attempts yet.</li>'}</ul>${q.sources.map(s=>`<p>${esc(s.filename)} · page ${s.page_start}${s.page_end!==s.page_start?'–'+s.page_end:''}</p>`).join('')}</div></details></div>`;
  Timers.startQuestion(q.id);
  $('workspace').querySelectorAll('.choice').forEach(b=>b.onclick=()=>selectAnswer(b.dataset.letter));
- if(q.answer_type!=='choice'){$('numericAnswer').oninput=()=>{selectedAnswer=$('numericAnswer').value.trim();$('checkAnswer').disabled=!selectedAnswer;};$('numericAnswer').onkeydown=e=>{if(e.key==='Enter'&&!$('checkAnswer').disabled){e.preventDefault();$('checkAnswer').click();}};}
- $('checkAnswer').onclick=safe(()=>testing?saveTestAnswer():answer(selectedAnswer));
+ if(q.answer_type!=='choice'&&!reviewing){const input=$('numericAnswer');input.oninput=()=>{if(testing)saveTestAnswer(input.value);else{selectedAnswer=input.value.trim();$('checkAnswer').disabled=!selectedAnswer;}};input.onkeydown=e=>{if(e.key!=='Enter'||e.isComposing)return;if(testing&&testEntry(q.id)?.answer){e.preventDefault();$('nextQuestion').click();}else if(!testing&&!$('checkAnswer').disabled){e.preventDefault();$('checkAnswer').click();}};}
+ if(testing)$('guessed').onchange=()=>saveTestAnswer();
  if(!inTest()){
+  $('checkAnswer').onclick=safe(()=>answer(selectedAnswer));
   $('showNotes').onclick=()=>{$('notesPanel').hidden=false;$('showNotes').hidden=true;};
   $('note').oninput=()=>{pendingNotes.set(q.id,$('note').value);$('saveStatus').textContent='Saving…';clearTimeout(noteTimer);noteTimer=setTimeout(safe(flushNotes),600);};
   $('saveNote').onclick=safe(flushNotes);
@@ -96,17 +97,17 @@ function renderQuestion(){
   $('reviewToggle').onclick=safe(async()=>{const value=!q.needs_review;await api('review',{question_id:q.id,needs_review:value});q.needs_review=+value;$('reviewToggle').textContent=value?'✓ In review':'Mark for review';$('stateBadge').textContent=stateLabel(q);await refreshProgress();});
  }
  $('copyLink').onclick=safe(async()=>{await navigator.clipboard.writeText(location.href);toast('Question link copied');});
- if(inTest())$('flagTest').onclick=()=>{const entry=testEntry(q.id)||{};entry.flagged=!entry.flagged;fullTest.answers[q.id]=entry;saveTest();$('flagTest').setAttribute('aria-pressed',String(entry.flagged));$('flagTest').textContent=entry.flagged?'✓ Flagged':'Flag for review';renderList();};
+ if(inTest())$('flagTest').onclick=()=>{const entry=testEntry(q.id)||{};entry.flagged=!entry.flagged;fullTest.answers[q.id]=entry;saveTest();$('flagTest').setAttribute('aria-pressed',String(entry.flagged));$('flagTest').textContent=entry.flagged?'✓ Flagged':'Flag for review';$('stateBadge').textContent=stateLabel(q);renderList();};
  $('nextQuestion').onclick=safe(nextQuestion);
- if(examEntry?.answer){selectedAnswer=examEntry.answer;$('guessed').checked=!!examEntry.guessed;if(q.answer_type==='choice')$('workspace').querySelectorAll('.choice').forEach(b=>{const selected=b.dataset.letter===selectedAnswer;b.classList.toggle('selected',selected);b.setAttribute('aria-pressed',String(selected));});else $('numericAnswer').value=selectedAnswer;if(testing)$('checkAnswer').disabled=false;}
+ if(examEntry){selectedAnswer=examEntry.answer||null;$('guessed').checked=!!examEntry.guessed;if(q.answer_type==='choice')$('workspace').querySelectorAll('.choice').forEach(b=>{const selected=b.dataset.letter===selectedAnswer;b.classList.toggle('selected',selected);b.setAttribute('aria-pressed',String(selected));});else $('numericAnswer').value=examEntry.draft??examEntry.answer??'';}
  if(reviewing)showTestResult(q,fullTest.results?.[q.id]);
 }
 async function refreshProgress(){await Promise.all([loadList(false),stats()]);}
 function selectAnswer(letter){
- if(busy||answered||!current)return;
+ if(busy||answered||!current||inTest()&&!activeTest())return;
  selectedAnswer=letter;
  $('workspace').querySelectorAll('.choice').forEach(b=>{const selected=b.dataset.letter===letter;b.classList.toggle('selected',selected);b.setAttribute('aria-pressed',String(selected));});
- $('checkAnswer').disabled=false;
+ if(activeTest())saveTestAnswer(letter);else $('checkAnswer').disabled=false;
 }
 function updateTestUI(){
  const bar=$('testModeBar');if(!bar)return;bar.hidden=!inTest();
@@ -115,25 +116,41 @@ function updateTestUI(){
  $('fullTestSetup').hidden=inTest();$('activeTestCard').hidden=!inTest();
  if(!inTest())return;
  const done=Object.values(fullTest.answers||{}).filter(entry=>entry.answer).length,total=questions.length||fullTest.total||0;
+ if(activeTest())Timers.setAnswerCount(done);
  $('testModeProgress').textContent=fullTest.status==='active'?`Full test · ${done}/${total} answered`:`Results · ${fullTest.score}/${fullTest.total} correct`;
  $('activeTestTitle').textContent=`${fullTest.year} · ${total} questions`;$('activeTestProgress').textContent=fullTest.status==='active'?`${done} answered · ${Math.max(0,total-done)} remaining`:`${fullTest.score} of ${fullTest.total} correct`;
  $('submitFullTest').textContent=fullTest.status==='active'?'Finish test':'Exit review';
  $('submitFullTestMenu').textContent=fullTest.status==='active'?'Finish and submit test':'Exit test review';
- $('submitFullTest').onclick=fullTest.status==='active'?openSubmitDialog:safe(exitTestReview);
- $('submitFullTestMenu').onclick=fullTest.status==='active'?openSubmitDialog:safe(exitTestReview);
+ const finish=fullTest.status==='active'?openSubmitDialog:exitTestReview;
+ $('submitFullTest').onclick=$('submitFullTestMenu').onclick=safe(finish);
 }
-function openSubmitDialog(){
- if(!activeTest())return;const done=Object.values(fullTest.answers||{}).filter(entry=>entry.answer).length,total=questions.length||fullTest.total||0,missing=Math.max(0,total-done);
+async function openSubmitDialog(){
+ if(!activeTest()||busy)return;const invalid=questions.find(q=>invalidTestDraft(testEntry(q.id)));
+ if(invalid){$('testMenu').open=false;showView(false);if(current?.id!==invalid.id)await openQuestion(invalid.id);$('numericAnswer')?.focus();toast('Fix or clear this answer before submitting.');return;}
+ const done=Object.values(fullTest.answers||{}).filter(entry=>entry.answer).length,total=questions.length||fullTest.total||0,missing=Math.max(0,total-done);
  $('submitTestDescription').textContent=`${done} of ${total} questions answered${missing?` · ${missing} left blank`:''}.`;$('submitTestDialog').showModal();
 }
 async function exitTestReview(){fullTest=null;saveTest();updateTestUI();await loadList();toast('Test review closed.');}
-async function saveTestAnswer(){
- if(!activeTest()||!current||!selectedAnswer)return;
- const first=!testEntry(current.id)?.answer,spent=Timers.stopQuestion();
- fullTest.answers[current.id]={...testEntry(current.id),answer:selectedAnswer,guessed:$('guessed').checked,elapsed_ms:spent};saveTest();
- if(first)Timers.countAnswer();
- answered=true;$('checkAnswer').textContent='Saved';$('attemptInfo').textContent='Answer saved for this test';renderList();updateTestUI();
- await nextQuestion();
+const invalidTestDraft=entry=>!entry?.answer&&!!entry?.draft?.trim();
+const testAnswerMessage=entry=>invalidTestDraft(entry)?'Enter a number, decimal, or fraction':entry?.answer?'Answer saved':'Answers save automatically';
+function saveTestAnswer(draft){
+ if(!activeTest()||busy||!current||current.year!==fullTest.year)return;
+ const previous=testEntry(current.id)||{},entry={...previous,guessed:$('guessed').checked};
+ if(draft!==undefined){
+  let answer=draft.trim();
+  if(current.answer_type==='numeric'&&answer){
+   answer=answer.replace(/\s+/g,'').replace(/−/g,'-').replace(/^([+-]?)(\d+)\/([+-])(\d+)$/,(_,nSign,n,dSign,d)=>((nSign==='-')!==(dSign==='-')?'-':'')+n+'/'+d);
+   if(!SATCore.numeric(answer))answer='';
+  }
+  entry.answer=answer;
+  if(draft!==answer)entry.draft=draft;else delete entry.draft;
+  if(previous.answer!==answer)entry.elapsed_ms=answer?Timers.questionElapsed():null;
+ }
+ const test={...fullTest,answers:{...fullTest.answers,[current.id]:entry}};
+ try{saveTest(test);}catch(e){$('attemptInfo').textContent='Could not save this answer on this device';fail(e);return;}
+ fullTest=test;
+ const status=$('attemptInfo'),message=testAnswerMessage(entry);if(status.textContent!==message)status.textContent=message;
+ if(!!previous.answer!==!!entry.answer||invalidTestDraft(previous)!==invalidTestDraft(entry)){$('stateBadge').textContent=stateLabel(current);renderList();updateTestUI();}
 }
 function showTestResult(q,result){
  const entry=testEntry(q.id);$('workspace').querySelectorAll('.choice').forEach(b=>{b.disabled=true;if(result&&b.dataset.letter===result.correct_answer)b.classList.add('correct');if(entry&&b.dataset.letter===entry.answer&&!result?.is_correct)b.classList.add('wrong');});
@@ -255,6 +272,7 @@ const Timers=(function(){
  // Resetting changes the number, never whether the clock is running.
  function resetQuestion(){q={qid:q.qid,ms:0,since:q.since?Date.now():null,seen:Date.now(),manual:q.manual,done:false};persist(true);paint();}
  function countAnswer(){if(set.since){set.answered++;persist(true);paint();}}
+ function setAnswerCount(count){if(set.answered!==count){set.answered=count;persist(true);paint();}}
  function toggleSet(){
   if(set.locked&&set.since)return;
   if(set.since){set.ms+=Math.max(0,Date.now()-set.since);set.since=null;}
@@ -288,7 +306,7 @@ const Timers=(function(){
   addEventListener('pagehide',()=>persist(true));
   loop();paint();
  }
- return {init,startQuestion,stopQuestion,countAnswer,clock,startExam,finishExam,examElapsed:()=>live(set)};
+ return {init,startQuestion,stopQuestion,questionElapsed:()=>clamp(Math.round(live(q)),0,7200000),countAnswer,setAnswerCount,clock,startExam,finishExam,examElapsed:()=>live(set)};
 })();
 function showView(progress){$('practiceView').hidden=progress;$('progressView').hidden=!progress;$('progressTab').classList.toggle('active',progress);$('progressTab').textContent=progress?'← Practice':'Progress';}
 async function init(){
@@ -338,7 +356,7 @@ async function init(){
  window.addEventListener('hashchange',safe(async()=>{const id=new URLSearchParams(location.hash.slice(1)).get('q');if(id&&id!==current?.id)await openQuestion(id);}));
  window.addEventListener('beforeunload',e=>{if(pendingNotes.size){e.preventDefault();e.returnValue='';}});
  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'&&pendingNotes.size)flushNotes().catch(fail);});
- document.addEventListener('keydown',e=>{if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)||e.ctrlKey||e.metaKey||e.altKey||$('practiceView').hidden)return;if(/^[a-e]$/i.test(e.key)&&current?.answer_type==='choice'&&!answered&&current.choices.some(c=>c.letter===e.key.toUpperCase()))selectAnswer(e.key.toUpperCase());});
+ document.addEventListener('keydown',e=>{if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)||e.ctrlKey||e.metaKey||e.altKey||e.isComposing||$('practiceView').hidden||document.querySelector('dialog[open]'))return;if(/^[a-e]$/i.test(e.key)&&current?.answer_type==='choice'&&!answered&&current.choices.some(c=>c.letter===e.key.toUpperCase()))selectAnswer(e.key.toUpperCase());});
  const imported=sessionStorage.getItem('sat-import-result');if(imported){sessionStorage.removeItem('sat-import-result');$('error').textContent=imported;$('error').classList.add('success');$('error').hidden=false;}
  if(window.SATCloud&&window.SATOffline){
   window.addEventListener('sat-cloud-updated',safe(async()=>{

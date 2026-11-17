@@ -169,7 +169,7 @@ def validate(data):
             seen.add(unique)
             date='answered_at' if key=='attempts' else 'updated_at';r[date]=stamp(r[date])
             if key=='attempts':
-                if not isinstance(r['selected_answer'],str) or len(r['selected_answer'])>30 or r['guessed'] not in (0,1) or r['is_correct']!=int(answer_correct(qs[r['question_id']],r['selected_answer'])):raise ValueError('Invalid attempt')
+                if not isinstance(r['selected_answer'],str) or len(r['selected_answer'])>500 or r['guessed'] not in (0,1) or r['is_correct']!=int(answer_correct(qs[r['question_id']],r['selected_answer'])):raise ValueError('Invalid attempt')
                 r['guessed']=int(r['guessed']);r['is_correct']=int(r['is_correct']);r['elapsed_ms']=elapsed(r.get('elapsed_ms'))
             elif key=='notes':
                 text(r['content'],20000)

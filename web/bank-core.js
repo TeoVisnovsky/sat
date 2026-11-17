@@ -43,7 +43,7 @@
     if(key==='tags'){text(r.name,60);check(r.name.trim(),'Empty tag');continue;}
     identity(r.id);const unique=['ratings','reviews'].includes(key)?r.question_id:r.id;check(!seen.has(unique),'Duplicate record ID');seen.add(unique);
     const date=key==='attempts'?'answered_at':'updated_at';check(typeof r[date]==='string'&&Number.isFinite(Date.parse(r[date])),'Invalid timestamp');r[date]=new Date(r[date]).toISOString();
-    if(key==='attempts'){check(typeof r.selected_answer==='string'&&r.selected_answer.length<=30&&[0,1,false,true].includes(r.guessed)&&[0,1,false,true].includes(r.is_correct)&&+r.is_correct===+answerCorrect(qs.get(r.question_id),r.selected_answer),'Invalid attempt');r.guessed=+r.guessed;r.is_correct=+r.is_correct;r.elapsed_ms=elapsed(r.elapsed_ms??null);}
+    if(key==='attempts'){check(typeof r.selected_answer==='string'&&r.selected_answer.length<=500&&[0,1,false,true].includes(r.guessed)&&[0,1,false,true].includes(r.is_correct)&&+r.is_correct===+answerCorrect(qs.get(r.question_id),r.selected_answer),'Invalid attempt');r.guessed=+r.guessed;r.is_correct=+r.is_correct;r.elapsed_ms=elapsed(r.elapsed_ms??null);}
     if(key==='notes'){text(r.content,20000);check(Array.isArray(r.parents));}
     if(key==='ratings')check(personalLevels.includes(r.rating));
     if(key==='reviews'){check([0,1,false,true].includes(r.needs_review));r.needs_review=+r.needs_review;}
