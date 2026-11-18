@@ -359,7 +359,9 @@ async function init(){
  $('mobileFilters').onclick=()=>{const open=!$('practiceView').classList.contains('filters-open');$('practiceView').classList.toggle('filters-open',open);$('mobileFilters').setAttribute('aria-expanded',String(open));$('drawerBackdrop').hidden=!open;};$('closeMobileFilters').onclick=closeDrawer;$('drawerBackdrop').onclick=closeDrawer;
  meta=await api('meta');$('domain').innerHTML+=[...meta.domains].map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join('');fillSkills();fillTags();
  $('testMenu').hidden=!meta.is_maturita;
- $('questionTimer').hidden=$('timerMenu').hidden=meta.is_maturita;
+ $('questionTimer').hidden=false;
+ $('questionTimer').classList.toggle('simple',meta.is_maturita);
+ $('timerMenu').hidden=meta.is_maturita;
  Timers.init();
  $('officialDifficultyWrap').hidden=meta.is_maturita;$('tagFilterWrap').hidden=meta.is_maturita;
  $('sideYearWrap').hidden=!meta.is_maturita;

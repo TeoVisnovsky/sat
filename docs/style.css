@@ -79,3 +79,4 @@ html,body{max-width:100%;overflow-x:hidden}.app-header{height:68px;padding:0 28p
 .state-icon.test-flagged{color:#4b5563;font-weight:700}
 .state-icon.blank{color:#9aa3b2}
 .exam-countdown{white-space:nowrap;font-variant-numeric:tabular-nums}
+.timer-chip.simple .timer-bar,.timer-chip.simple .timer-delta{display:none}
