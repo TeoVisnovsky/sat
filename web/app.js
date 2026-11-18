@@ -172,8 +172,8 @@ function renderTestResultsOverview(){
 async function submitTest(){
  if(!activeTest()||busy)return;busy=true;$('confirmSubmitTest').disabled=true;$('cancelSubmitTest').disabled=true;
  try{
-  const elapsed=Timers.finishExam(),payload={session_id:fullTest.id,year:fullTest.year,timed:!!fullTest.timed,started_at:fullTest.started_at,elapsed_ms:elapsed,total:questions.length,answers:Object.entries(fullTest.answers||{}).filter(([,entry])=>entry.answer).map(([question_id,entry])=>({question_id,answer:entry.answer,guessed:!!entry.guessed,elapsed_ms:entry.elapsed_ms}))};
-  const submitted=await api('test-submit',payload);fullTest.status='review';fullTest.results=submitted.results;fullTest.score=submitted.score;fullTest.answered=submitted.answered;fullTest.total=submitted.total;fullTest.elapsed_ms=submitted.elapsed_ms;saveTest();$('submitTestDialog').close();updateTestUI();await loadList(false);await stats();renderTestResultsOverview();toast(`Test submitted · ${fullTest.score}/${fullTest.total} correct.`);
+  const elapsed=Timers.examElapsed(),payload={session_id:fullTest.id,year:fullTest.year,timed:!!fullTest.timed,started_at:fullTest.started_at,elapsed_ms:elapsed,total:questions.length,answers:Object.entries(fullTest.answers||{}).filter(([,entry])=>entry.answer).map(([question_id,entry])=>({question_id,answer:entry.answer,guessed:!!entry.guessed,elapsed_ms:entry.elapsed_ms}))};
+  const submitted=await api('test-submit',payload);fullTest.status='review';Timers.finishExam();fullTest.results=submitted.results;fullTest.score=submitted.score;fullTest.answered=submitted.answered;fullTest.total=submitted.total;fullTest.elapsed_ms=submitted.elapsed_ms;saveTest();$('submitTestDialog').close();updateTestUI();await loadList(false);await stats();renderTestResultsOverview();toast(`Test submitted · ${fullTest.score}/${fullTest.total} correct.`);
  }finally{busy=false;$('confirmSubmitTest').disabled=false;$('cancelSubmitTest').disabled=false;}
 }
 async function answer(letter){
@@ -209,7 +209,7 @@ async function nextQuestion(){
    Both survive reloads (switching banks reloads the page), pause when the tab is hidden, and
    never count time while the app was closed: each tick records when it was last seen alive. */
 const Timers=(function(){
- const QKEY='sat-question-timer-v1:'+bank,PACE_KEY='sat-pace-v1:'+bank,SKEY='sat-set-timer-v1';
+ const QKEY='sat-question-timer-v1:'+bank,PACE_KEY='sat-pace-v1:'+bank,PRACTICE_TIMER_KEY='sat-set-timer-v1';
  const DEFAULTS={main:{minutes:64,questions:54},math:{minutes:70,questions:44},'maturita-slovak':{minutes:100,questions:64},'maturita-math':{minutes:150,questions:30}};
  const fallback=()=>DEFAULTS[bank]||DEFAULTS.main;
  const read=(k,f)=>{try{const v=JSON.parse(localStorage.getItem(k));return v&&typeof v==='object'?v:f;}catch(e){return f;}};
@@ -217,7 +217,7 @@ const Timers=(function(){
  const clamp=(n,lo,hi)=>Math.min(hi,Math.max(lo,n));
  let pace=read(PACE_KEY,null)||{...fallback()};
  let q=read(QKEY,null)||{qid:null,ms:0,since:null,seen:0,manual:false,done:false};
- let set=read(SKEY,null)||{mode:'up',ms:0,since:null,seen:0,answered:0,locked:false};
+ let set,setKey;
  let ticker=null,writes=0;
  const live=s=>s.ms+(s.since?Math.max(0,Date.now()-s.since):0);
  const paceMs=()=>Math.round(pace.minutes*60000/pace.questions);
@@ -229,7 +229,7 @@ const Timers=(function(){
   else if(s.since){s.ms+=Math.max(0,(s.seen||s.since)-s.since);s.since=Date.now()-(s.seen||0)<10000?Date.now():null;}
   return s;
  }
- function persist(force){if(force||++writes%4===0){q.seen=set.seen=Date.now();save(QKEY,q);save(SKEY,set);}}
+ function persist(force){if(force||++writes%4===0){q.seen=set.seen=Date.now();save(QKEY,q);save(setKey,set);}}
  function loop(){if(!ticker)ticker=setInterval(()=>{paint();persist();},500);}
  function paint(){
   const ms=live(q),target=paceMs(),over=ms-target,chip=$('questionTimer'),paused=!q.since&&!q.done;
@@ -244,6 +244,9 @@ const Timers=(function(){
   $('timerDelta').disabled=!paused;
   $('timerDelta').title=paused?'Reset this question to 0:00':'';
   const running=!!set.since||set.ms>0,elapsed=live(set),left=targetMs()-elapsed;
+  const countdown=$('examCountdown');
+  countdown.hidden=!(activeTest()&&fullTest.timed);
+  if(!countdown.hidden)countdown.textContent=left>0?clock(left)+' left':'Time is up';
   $('timerSummary').textContent=running?(set.mode==='down'?clock(Math.max(0,left))+' left':clock(elapsed)):'Timer';
   $('timerMenu').classList.toggle('warning',running&&set.mode==='down'&&left<=300000&&left>0);
   $('timerMenu').classList.toggle('over',running&&set.mode==='down'&&left<=0);
@@ -291,7 +294,24 @@ const Timers=(function(){
  function finishExam(){if(set.since){set.ms+=Math.max(0,Date.now()-set.since);set.since=null;}set.locked=false;persist(true);paint();return set.ms;}
  function fillPace(){$('paceMinutes').value=pace.minutes;$('paceQuestions').value=pace.questions;}
  function init(){
+  // Keep the SAT pace timer separate from Maturita exams, including when switching banks mid-test.
+  setKey=meta.is_maturita?'sat-exam-timer-v1:'+bank:PRACTICE_TIMER_KEY;
+  set=read(setKey,null);
+  if(!set&&activeTest()&&meta.is_maturita){
+   const legacy=read(PRACTICE_TIMER_KEY,null);
+   const timed=!!fullTest.timed;
+   const started=Date.parse(fullTest.started_at)||Date.now();
+   const estimatedStart=legacy?.since&&legacy.since-legacy.ms;
+   // Restore an active exam saved before the timers were separated.
+   if(estimatedStart&&Math.abs(estimatedStart-started)<10000&&!!legacy.locked===timed){
+    set=legacy;
+   }else{
+    set={mode:timed?'down':'up',ms:0,since:timed?started:Date.now(),seen:Date.now(),answered:0,locked:timed};
+   }
+  }
+  if(!set||(!meta.is_maturita&&set.locked))set={mode:'up',ms:0,since:null,seen:0,answered:0,locked:false};
   hydrate(q);hydrate(set);
+  persist(true);
   fillPace();$('setMode').value=set.mode;
   $('timerToggle').onclick=toggleQuestion;
   $('timerDelta').onclick=resetQuestion;
@@ -313,7 +333,6 @@ const Timers=(function(){
 })();
 function showView(progress){$('practiceView').hidden=progress;$('progressView').hidden=!progress;$('progressTab').classList.toggle('active',progress);$('progressTab').textContent=progress?'← Practice':'Progress';}
 async function init(){
- Timers.init();
  for(const id of ['timerMenu','testMenu','bankMenu','dataMenu','accountMenu'])document.addEventListener('click',e=>{if(!$(id).contains(e.target))$(id).open=false;});
  document.addEventListener('keydown',e=>{if(e.key==='Escape'){for(const id of ['bankMenu','timerMenu','testMenu','dataMenu','accountMenu'])$(id).open=false;closeDrawer();}});
  const banks=await api('banks');
@@ -339,7 +358,9 @@ async function init(){
  const closeDrawer=()=>{$('practiceView').classList.remove('filters-open');$('mobileFilters').setAttribute('aria-expanded','false');$('drawerBackdrop').hidden=true;};
  $('mobileFilters').onclick=()=>{const open=!$('practiceView').classList.contains('filters-open');$('practiceView').classList.toggle('filters-open',open);$('mobileFilters').setAttribute('aria-expanded',String(open));$('drawerBackdrop').hidden=!open;};$('closeMobileFilters').onclick=closeDrawer;$('drawerBackdrop').onclick=closeDrawer;
  meta=await api('meta');$('domain').innerHTML+=[...meta.domains].map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join('');fillSkills();fillTags();
- $('startFullTest').hidden=!meta.is_maturita;
+ $('testMenu').hidden=!meta.is_maturita;
+ $('questionTimer').hidden=$('timerMenu').hidden=meta.is_maturita;
+ Timers.init();
  $('officialDifficultyWrap').hidden=meta.is_maturita;$('tagFilterWrap').hidden=meta.is_maturita;
  $('sideYearWrap').hidden=!meta.is_maturita;
  const years='<option value="">All years</option>'+meta.years.map(y=>`<option value="${y}">${y}</option>`).join('');$('sideYear').innerHTML=years;$('fullTestYear').innerHTML=meta.years.map(y=>`<option value="${y}">${y}</option>`).join('');
